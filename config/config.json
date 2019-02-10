@@ -1,0 +1,49 @@
+{
+  "logging": {
+    "__level": "default: WARNING. Possible: INFO,ERROR,CRITICAL,DEBUG",
+    "level": "DEBUG",
+    "__filename": "default: empty string (stdout).",
+    "filename": ""
+  },
+  "daemon":{
+    "listen_host": "127.0.0.1",
+    "listen_port": 5001
+  },
+  "trusted_proxies": {
+    "rprx01":[
+      "172.16.100.5", "fd00:100::5"
+    ],
+    "rprx02":[
+      "172.16.100.6", "fd00:100::6"
+    ]
+  },
+  "api_keys": {
+    "HIGHLY_SECURE_API_KEY": {
+      "user": "GULAG APP"
+    }
+  },
+  "uri_prefixes": {
+    "root": "http://127.0.0.1:9090/api/v1/",
+    "mailrelays": "http://127.0.0.1:9090/api/v1/mailrelays/",
+    "mailboxes": "http://127.0.0.1:9090/api/v1/mailboxes/",
+    "quarmails": "http://127.0.0.1:9090/api/v1/quarmails/",
+    "attachments": "http://127.0.0.1:9090/api/v1/attachments/",
+    "uris": "http://127.0.0.1:9090/api/v1/uris/"
+  },
+  "dos_protection": {
+    "max_body_bytes": 8388608
+  },
+  "db":{
+    "unix_socket": "/mysqld/mysqld.sock",
+    "user": "root",
+    "password": "",
+    "name": "Gulag"
+  },
+  "cleaner":{
+    "retention_period": "12 hour",
+    "interval": 10
+  },
+  "importer":{
+    "interval": 10
+  }
+}
