@@ -5,6 +5,8 @@ So, if you already have a LDAP server running with e.g. amavis-schema, you may r
 
 The connection to the LDAP server is always persistent: one TCP-Session, one LDAP-bind -> less overhead
 
+The intention of this project is to deploy the milter ALWAYS AND ONLY as a docker container. The main reason ist that I´m not so familiar with/interested in building distribution packages (rpm, deb, ...). Furthermore I´m not realy a fan of 'wild and uncontrollable' software deployments: get the code, compile and finaly install the results 'somewhere' in the filesystem. In term of CI/CD docker gives us wonderful possibilities I don´t want to miss anymore...
+
 ### docker-compose.yml
 
 ```
