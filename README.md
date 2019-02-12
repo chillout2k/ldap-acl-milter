@@ -1,5 +1,7 @@
 # ldap-acl-milter
-A fast and lightweight python3 milter (on top of [sdgathman/pymilter](https://github.com/sdgathman/pymilter)) for Access ControL (ACL) scenarios. The milter consumes policies from a LDAP server based on custom queries with trivial templating (%from% = RFC5321.from; %rcpt% = RFC5321.rcpt) support.
+A fast and lightweight and thread-safe python3 milter on top of [sdgathman/pymilter](https://github.com/sdgathman/pymilter) for Access ControL (ACL) scenarios. The milter consumes policies from a LDAP server based on custom queries with trivial templating support (%from% = RFC5321.from; %rcpt% = RFC5321.rcpt). Please have a look at the docker-compose.yml example.
+
+So, if you already have a LDAP server running with e.g. amavis-schema, you may reuse the 'amavisWhitelistSender'/'amavisBlacklistSender' attributes. Please have a look at the docker-compose.yml example.
 
 The connection to the LDAP server is always persistent: one TCP-Session, one LDAP-bind -> less overhead
 
@@ -20,7 +22,7 @@ services:
       LDAP_BINDDN: uid=lam,ou=apps,dc=example,dc=org
       LDAP_BINDPW: TopSecret1!
       LDAP_BASE: ou=users,dc=example,dc=org
-      LDAP_QUERY: (&(mail=%rcpt%)(whitelistSender=%from%))
+      LDAP_QUERY: (&(mail=%rcpt%)(amavisWhitelistSender=%from%))
       # Socket default: /socket/ldap-acl-milter
       # MILTER_SOCKET: inet6:8020
       MILTER_REJECT_MESSAGE: Rejected due to security policy violation
