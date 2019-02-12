@@ -1,4 +1,7 @@
 # ldap-acl-milter
+A fast and lightweight python3 milter (on top of [sdgathman/pymilter](https://github.com/sdgathman/pymilter)) for Access ControL (ACL) scenarios. The milter consumes policies from a LDAP server based on custom queries with trivial templating (%from% = RFC5321.from; %rcpt% = RFC5321.rcpt) support.
+
+The connection to the LDAP server is always persistent: one TCP-Session, one LDAP-bind -> less overhead
 
 ### docker-compose.yml
 
