@@ -18,5 +18,6 @@ RUN env; set -ex ; \
  && rm -rf /var/lib/apt/lists/*
 
 COPY app/*.py /app/
+COPY entrypoint.sh /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
