@@ -1,9 +1,9 @@
 # ldap-acl-milter
 A lightweight, fast and thread-safe python3 milter on top of [sdgathman/pymilter](https://github.com/sdgathman/pymilter) for basic Access Control (ACL) scenarios. The milter consumes policies from LDAP based on custom queries with trivial templating support (%from% = RFC5321.from; %rcpt% = RFC5321.rcpt). So, if you already have a LDAP server running with e.g. amavis-schema, you may reuse the 'amavisWhitelistSender'/'amavisBlacklistSender' attributes. Please have a look at the docker-compose.yml example. Of course one is free to write an own LDAP schema for his/her case ;)
 
-The LDAP-connection is always persistent: one TCP-Session/one LDAP-bind shared among all milter-threads, which makes it less overhead. Thus, LDAP interactions with 3 msec. and less are realistic, depending on your environment like network round-trip-times, the load of your LDAP server, ... 
+The LDAP-connection is always persistent: one TCP-Session/one LDAP-bind shared among all milter-threads, which makes it less overhead. Thus, LDAP interactions with 3 msec. and less are realistic, depending on your environment like network round-trip-times, the load of your LDAP server, ...
 
-The milter base ([sdgathman/pymilter](https://github.com/sdgathman/pymilter)) is able to 'spawn' hundreds of threads with a wink ;)
+The milter base ([sdgathman/pymilter](https://github.com/sdgathman/pymilter)) is able to 'spawn' hundreds of threads within a wink ;)
 
 The intention of this project is to deploy the milter ALWAYS AND ONLY as a docker container. The main reason ist that I´m not so familiar with/interested in building distribution packages (rpm, deb, ...). Furthermore I´m not realy a fan of 'wild and uncontrollable' software deployments: get the code, compile and finaly install the results 'somewhere' in the filesystem. In term of CI/CD docker gives us wonderful possibilities I don´t want to miss anymore...
 
