@@ -1,11 +1,14 @@
 import Milter
-from ldap3 import Server,Connection,NONE,LDAPOperationResult
+from ldap3 import (
+  Server,ServerPool,Connection,NONE,LDAPOperationResult
+)
 import sys
 import os
 import logging
-from multiprocessing import Process,Queue
+import string
+import random
+from timeit import default_timer as timer
 
-log_queue = Queue(maxsize=32)
 g_milter_name = 'ldap-acl-milter'
 g_milter_socket = '/socket/' + g_milter_name
 g_milter_reject_message = 'Absender/Empfaenger passen nicht!'
@@ -22,12 +25,18 @@ logging.basicConfig(
 )
 
 class LdapAclMilter(Milter.Base):
-  def __init__(self):  # A new instance with each new connection.
+  # Each new connection is handled in an own thread
+  def __init__(self):
+    self.time_start = timer()
     self.id = Milter.uniqueID()
     self.ldap_conn = g_ldap_conn
     self.R = []
+    # https://stackoverflow.com/a/2257449
+    self.mconn_id = ''.join(
+      random.choice(string.ascii_lowercase + string.digits) for _ in range(8)
+    )
 
-  # Not registered callbacks
+  # Not registered/used callbacks
   @Milter.nocallback
   def connect(self, IPname, family, hostaddr):
     return self.CONTINUE
@@ -46,7 +55,9 @@ class LdapAclMilter(Milter.Base):
 
   def envfrom(self, mailfrom, *str):
     if mailfrom == '<>':
-      self.setreply('550','5.7.1','Envelope null-sender not allowed!')
+      ex = str(self.mconn_id + '/FROM Envelope null-sender not allowed!')
+      logging.error(ex)
+      self.setreply('550','5.7.1',ex)
       Milter.REJECT
     mailfrom = mailfrom.replace("<","")
     mailfrom = mailfrom.replace(">","")
@@ -54,53 +65,74 @@ class LdapAclMilter(Milter.Base):
     return Milter.CONTINUE
 
   def envrcpt(self, to, *str):
+    time_start = timer()
     to = to.replace("<","")
     to = to.replace(">","")
+    time_end = None
     try:
       query = g_ldap_query.replace("%rcpt%",to)
       query = query.replace("%from%", self.F)
       self.ldap_conn.search(g_ldap_base, query)
+      time_end = timer()
       if len(self.ldap_conn.entries) == 0:
-        self.R.append({"rcpt": to, "reason": g_milter_reject_message})
-        self.setreply('550','5.7.1',g_milter_reject_message)
+        self.R.append({
+          "rcpt": to, "reason": g_milter_reject_message,
+          "time_start":time_start, "time_end":time_end
+        })
+        self.setreply('550','5.7.1',
+          'Sender does not comply with recipients policy!'
+        )
+        logging.info(self.mconn_id + "/RCPT " + g_milter_reject_message)
         return Milter.REJECT
     except LDAPOperationResult as e:
-      self.log("LDAP Exception (envrcpt): " + str(e))
-      self.setreply('451','4.7.1', str(e))
+      logging.warn(self.mconn_id + "/RCPT LDAP Exception (envrcpt): " + str(e))
+      self.setreply('451','4.7.1',
+        'Service temporarily not available! Please try again later.'
+      )
       return Milter.TEMPFAIL
-    self.R.append({"rcpt": to, "reason":'pass'})
+    self.R.append({
+      "rcpt": to, "reason":'pass',"time_start":time_start,"time_end":time_end
+    })
     return Milter.CONTINUE
 
   def data(self):
-    # This callback is used only to log with queue-id
-    for rcpt in self.R:
-      self.log(self.getsymval('i') +
-        ": 5321.from=<" + self.F + "> 5321.rcpt=<" +
-        rcpt['rcpt'] + "> reason: " + rcpt['reason']
+    # A queue-id will be generated after the first accepted RCPT TO
+    # and therefore not available until DATA command
+    self.queue_id = self.getsymval('i')
+    try:
+      for rcpt in self.R:
+        duration = rcpt['time_end'] - rcpt['time_start']
+        logging.info(self.mconn_id + "/DATA " + self.queue_id +
+          ": 5321.from=<" + self.F + "> 5321.rcpt=<" +
+          rcpt['rcpt'] + "> reason: " + rcpt['reason'] +
+          " duration: " + str(duration) + " sec."
+        )
+    except:
+      ex = str(self.mconn_id + "/DATA " + self.queue_id +
+        ": Exception (data): " + sys.exc_info()
       )
+      logging.warn(ex)
+      self.setreply('451','4.7.1', ex)
+      return Milter.TEMPFAIL
     return Milter.CONTINUE
 
   def eom(self):
-    # EOM will always be called - non-optional
+    # EOM is not optional and thus, always called by MTA
+    time_end = timer()
+    duration = time_end - self.time_start
+    logging.info(self.mconn_id + "/EOM " + self.queue_id +
+      " processing: " + str(duration) + " sec."
+    )
     return Milter.CONTINUE
 
   def abort(self):
-    # client disconnected prematurely
+    # Client disconnected prematurely
     return Milter.CONTINUE
 
   def close(self):
-    # always called, even when abort is called.  Clean up
-    # any external resources here.
+    # Always called, even when abort is called.
+    # Clean up any external resources here.
     return Milter.CONTINUE
-
-  def log(self,msg):
-    log_queue.put(msg)
-
-def logger_proc_loop():
-  while True:
-    qmsg = log_queue.get()
-    if not qmsg: break
-    logging.info(qmsg)
 
 if __name__ == "__main__":
   try:
@@ -124,7 +156,12 @@ if __name__ == "__main__":
       g_milter_socket = os.environ['MILTER_SOCKET']
     if 'MILTER_REJECT_MESSAGE' in os.environ:
       g_milter_reject_message = os.environ['MILTER_REJECT_MESSAGE']
+    #server_pool = ServerPool(None, pool_strategy='ROUND_ROBIN', active=False, exhaust=False)
     server = Server(g_ldap_server, get_info=NONE)
+    #server_pool.add(server)
+    #server2 = Server('ldap://ldap-master-zdf.zwackl.local:389', get_info=NONE)
+    #server_pool.add(server2)
+    #g_ldap_conn = Connection(server_pool,
     g_ldap_conn = Connection(server,
       g_ldap_binddn, g_ldap_bindpw,
       auto_bind=True, raise_exceptions=True,
@@ -135,18 +172,14 @@ if __name__ == "__main__":
     logging.error("LDAP Exception: " + str(e))
     sys.exit(1)
   try:
-    logger_proc = Process(target=logger_proc_loop)
-    logger_proc.start()
     timeout = 600
     # Register to have the Milter factory create instances of your class:
     Milter.factory = LdapAclMilter
     # Tell the MTA which features we use
     flags = Milter.ADDHDRS
     Milter.set_flags(flags)
-    logging.info("Startup " + g_milter_name + "@"+ g_milter_socket)
+    logging.info("Startup " + g_milter_name + "@socket: " + g_milter_socket)
     Milter.runmilter(g_milter_name,g_milter_socket,timeout,True)
-    log_queue.put(None)
-    logger_proc.join()
     logging.info("Shutdown " + g_milter_name)
   except:
     logging.error("MAIN-EXCEPTION: " + str(sys.exc_info()))
