@@ -3,9 +3,10 @@ from ldap3 import Server,Connection,NONE,LDAPOperationResult
 import sys
 import os
 import logging
+from timeit import default_timer as timer
 from multiprocessing import Process,Queue
 
-log_queue = Queue(maxsize=32)
+log_queue = Queue(maxsize=4)
 g_milter_name = 'ldap-acl-milter'
 g_milter_socket = '/socket/' + g_milter_name
 g_milter_reject_message = 'Absender/Empfaenger passen nicht!'
@@ -23,6 +24,7 @@ logging.basicConfig(
 
 class LdapAclMilter(Milter.Base):
   def __init__(self):  # A new instance with each new connection.
+    self.time_start = timer()
     self.id = Milter.uniqueID()
     self.ldap_conn = g_ldap_conn
     self.R = []
@@ -56,32 +58,50 @@ class LdapAclMilter(Milter.Base):
   def envrcpt(self, to, *str):
     to = to.replace("<","")
     to = to.replace(">","")
+    time_start = timer()
+    time_end = None
     try:
       query = g_ldap_query.replace("%rcpt%",to)
       query = query.replace("%from%", self.F)
       self.ldap_conn.search(g_ldap_base, query)
+      time_end = timer()
       if len(self.ldap_conn.entries) == 0:
-        self.R.append({"rcpt": to, "reason": g_milter_reject_message})
+        self.R.append({
+          "rcpt": to, "reason": g_milter_reject_message,
+          "time_start":time_start, "time_end":time_end
+        })
         self.setreply('550','5.7.1',g_milter_reject_message)
         return Milter.REJECT
     except LDAPOperationResult as e:
       self.log("LDAP Exception (envrcpt): " + str(e))
       self.setreply('451','4.7.1', str(e))
       return Milter.TEMPFAIL
-    self.R.append({"rcpt": to, "reason":'pass'})
+    self.R.append({
+      "rcpt": to, "reason":'pass',"time_start":time_start,"time_end":time_end
+    })
     return Milter.CONTINUE
 
   def data(self):
     # This callback is used only to log with queue-id
-    for rcpt in self.R:
-      self.log(self.getsymval('i') +
-        ": 5321.from=<" + self.F + "> 5321.rcpt=<" +
-        rcpt['rcpt'] + "> reason: " + rcpt['reason']
-      )
+    try:
+      for rcpt in self.R:
+        duration = rcpt['time_end'] - rcpt['time_start']
+        self.log(self.getsymval('i') +
+          ": 5321.from=<" + self.F + "> 5321.rcpt=<" +
+          rcpt['rcpt'] + "> reason: " + rcpt['reason'] +
+          " duration: " + str(duration) + " sec."
+        )
+    except:
+      self.log("Exception (data): " + str(sys.exc_info()))
+      self.setreply('451','4.7.1', str(sys.exc_info()))
+      return Milter.TEMPFAIL
     return Milter.CONTINUE
 
   def eom(self):
     # EOM will always be called - non-optional
+    time_end = timer()
+    duration = time_end - self.time_start
+    self.log(self.getsymval('i') + " processing: " + str(duration) + " sec.")
     return Milter.CONTINUE
 
   def abort(self):
