@@ -22,9 +22,9 @@ fi
 IMAGES="ldap-acl-milter"
 
 for IMAGE in ${IMAGES}; do
+#    --build-arg http_proxy=http://wprx-zdf.zwackl.local:3128 \
+#    --build-arg https_proxy=http://wprx-zdf.zwackl.local:3128 \
   /usr/bin/docker build \
-    --build-arg http_proxy=http://wprx-zdf.zwackl.local:3128 \
-    --build-arg https_proxy=http://wprx-zdf.zwackl.local:3128 \
     -t "${IMAGE}/${BASEOS}:${VERSION}_${BRANCH}" \
     -f "docker/${BASEOS}/Dockerfile" .
 #  /usr/bin/docker tag "${IMAGE}/${BASEOS}:${VERSION}_${BRANCH}" "${REGISTRY}/${IMAGE}/${BASEOS}:${VERSION}_${BRANCH}"
