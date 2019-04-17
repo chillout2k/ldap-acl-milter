@@ -2,6 +2,7 @@ ARG http_proxy
 ARG https_proxy
 FROM debian
 LABEL maintainer="Dominik Chilla <dominik@zwackl.de>"
+LABEL git_repo="https://github.com/chillout2k/ldap-acl-milter/tree/devel"
 
 ENV DEBIAN_FRONTEND=noninteractive \
  TZ=Europe/Berlin

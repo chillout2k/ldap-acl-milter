@@ -114,14 +114,15 @@ class LdapAclMilter(Milter.Base):
           pass
         else:
           # Authentication hierarchy!
-          # 1. SASL authenticated
-          # TODO: if auth_type sasl_user, check if authenticated user matches sasl_user and
-          # TODO: check if sender/recipient pair match
-          # 2. Client-IP authenticated
-          # TODO: if auth_type client_addr, check if client-ip matches client_addr
-          # TODO: check if sender/recipient pair match
-          # 3. not authenticated
-          # TODO: ldap-search with excluded sasl_user and client_addr attributes!
+          # 1. x509 client certificate
+          # 2. SASL authenticated
+          # if auth_type sasl_user, check if authenticated user matches sasl_user and
+          # check if sender/recipient pair match
+          # 3. Client-IP authenticated
+          # if auth_type client_addr, check if client-ip matches client_addr
+          # check if sender/recipient pair match
+          # 4. not authenticated
+          # ldap-search with excluded sasl_user and client_addr attributes!
           self.ldap_conn.search(g_ldap_base,
             "(&(allowedRcpts="+to+")(allowedSenders="+self.env_from+"))"
           )
