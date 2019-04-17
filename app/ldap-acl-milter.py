@@ -37,6 +37,7 @@ class LdapAclMilter(Milter.Base):
     self.env_from = None
     self.env_from_domain = None
     self.sasl_user = 'not_authenticated'
+    self.x509_cn = 'not_authenticated'
     # recipients list
     self.env_rcpts = []
     # https://stackoverflow.com/a/2257449
