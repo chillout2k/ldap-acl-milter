@@ -1,5 +1,5 @@
 # ldap-acl-milter
-A lightweight, fast and thread-safe python3 [milter](http://www.postfix.org/MILTER_README.html) on top of [sdgathman/pymilter](https://github.com/sdgathman/pymilter) for basic Access Control (ACL) scenarios. The milter consumes policies from LDAP based on custom queries with trivial templating support:
+A lightweight, fast and thread-safe python3 [milter](http://www.postfix.org/MILTER_README.html) on top of [sdgathman/pymilter](https://github.com/sdgathman/pymilter) for basic Access Control (ACL) scenarios. The milter consumes policies from LDAP based on a specialized [schema](https://github.com/chillout2k/ldap-acl-milter/LDAP/ldap-acl-milter.schema). Alternatively an already present schema can be uses as well. In this case custom queries with trivial templating support must be used:
 
 * %client_addr% = IPv(4|6) address of SMTP client
 * %sasl_user% = user name of SASL authenticated user
@@ -8,7 +8,7 @@ A lightweight, fast and thread-safe python3 [milter](http://www.postfix.org/MILT
 * %rcpt% = RFC5321.rcpt
 * %rcpt_domain% RFC5321.rcpt_domain
 
-In the case, one already has a LDAP server running with the [amavis schema](https://www.ijs.si/software/amavisd/LDAP.schema.txt), the 'amavisWhitelistSender' attribute could be reused. The filtering direction (inbound or outbound) can be simply controlled by swapping the %from% and %rcpt% placeholders within the LDAP query template.  Please have a look at the docker-compose.yml example below.
+In the case, one already has a LDAP server running with the [amavis schema](https://www.ijs.si/software/amavisd/LDAP.schema.txt), for e.g. the 'amavisWhitelistSender' attribute could be reused. The filtering direction (inbound or outbound) can be simply controlled by swapping the %from% and %rcpt% placeholders within the LDAP query template.  Please have a look at the docker-compose.yml example below.
 
 The connection to the LDAP server is always persistent: one LDAP-bind is shared among all milter-threads, which makes it more efficient due to less communication overhead (which also implies transport encryption with TLS). Thus, LDAP interactions with 2 msec. and less are realistic, depending on your environment like network round-trip-times or the load of your LDAP server. A very swag LDAP setup is to use a local read-only LDAP replica, which syncs over network with a couple of LDAP masters: [OpenLDAP does it for free!](https://www.openldap.org/doc/admin24/replication.html). On the one hand, this aproach eliminates network round trip times while reading from a UNIX-socket, and on the other, performance bottlenecks on a shared, centralized and (heavy) utilized LDAP server.
 
@@ -64,10 +64,10 @@ services:
       # This enables the use of own ldap-acl-milter LDAP schema. Default: False
       # Setting MILTER_SCHEMA: True disables the LDAP_QUERY parameter!
       MILTER_SCHEMA: 'True'
-      # If MILTER_SCHEMA_WILDCARDS is set to True, the milter gets all valid senders
-      # per recipient and checks binary as well as per wildcard (*) if the senders
-      # matches. This only works if MILTER_SCHEMA is enabled!
-      MILTER_SCHEMA_WILDCARDS: 'False'
+      # If MILTER_SCHEMA_WILDCARD_DOMAIN is set to True, the milter allows *@domain
+      # as valid sender/recipient addresses in LDAP.
+      # This only works if MILTER_SCHEMA is enabled!
+      MILTER_SCHEMA_WILDCARD_DOMAIN: 'False'
       # default: test. Possible: test, reject
       MILTER_MODE: 'reject'
       MILTER_NAME: some-another-milter-name
