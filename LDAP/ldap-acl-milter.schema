@@ -15,13 +15,6 @@ attributetype ( 1.3.6.1.4.1.53501.1.1.1
 	SYNTAX 1.3.6.1.4.1.1466.115.121.1.26{128}
 	SINGLE-VALUE)
 
-attributetype ( 1.3.6.1.4.1.53501.1.1.2
-	NAME 'authType'
-	DESC 'Authentication type: sasl_user, client_addr, none'
-	EQUALITY caseExactIA5Match
-	SYNTAX 1.3.6.1.4.1.1466.115.121.1.26{256}
-	SINGLE-VALUE)
-
 attributetype ( 1.3.6.1.4.1.53501.1.1.3
 	NAME 'allowedSenders'
 	DESC 'Allowed RFC5321.from'
@@ -78,8 +71,14 @@ attributetype ( 1.3.6.1.4.1.53501.1.1.10
 	SYNTAX 1.3.6.1.4.1.1466.115.121.1.26{4096})
 
 attributetype ( 1.3.6.1.4.1.53501.1.1.11
-	NAME 'allowedx509CN'
-	DESC 'Allowed x509 Common Name - CN'
+	NAME 'allowedx509subject'
+	DESC 'Allowed x509 Common Name - subject'
+	EQUALITY caseExactIA5Match
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.26{64})
+
+attributetype ( 1.3.6.1.4.1.53501.1.1.12
+	NAME 'allowedx509issuer'
+	DESC 'Allowed x509 Common Name - issuer'
 	EQUALITY caseExactIA5Match
 	SYNTAX 1.3.6.1.4.1.1466.115.121.1.26{64})
 
@@ -89,7 +88,11 @@ attributetype ( 1.3.6.1.4.1.53501.1.1.11
 objectclass ( 1.3.6.1.4.1.53501.1.2.1
 	NAME 'lamPolicy'
 	DESC 'ldap-acl-milter policy'
-	SUP top
-	STRUCTURAL
-	MUST ( policyID $ allowedRcpts $ allowedSenders )
-  MAY	 ( authType $ deniedSenders $ deniedRcpts $ allowedClientAddr $ deniedClientAddr $ allowedSaslUser $ extBLOB $ allowedx509CN ))
+	SUP top	STRUCTURAL
+	MUST policyID
+  MAY	 ( allowedRcpts $ deniedRcpts $
+	  allowedSenders $ deniedSenders $
+		allowedClientAddr $ deniedClientAddr $
+		allowedSaslUser $ extBLOB $
+		allowedx509subject $ allowedx509issuer )
+	)
