@@ -1,6 +1,6 @@
 import Milter
 from ldap3 import (
-  Server,ServerPool,Connection,NONE,LDAPOperationResult
+  Server,ServerPool,Connection,NONE,LDAPOperationResult,set_config_parameter
 )
 import sys
 import traceback
@@ -394,6 +394,8 @@ if __name__ == "__main__":
     if 'MILTER_EXPECT_AUTH' in os.environ:
       if re.match(r'^true$', os.environ['MILTER_EXPECT_AUTH'], re.IGNORECASE):
         g_milter_expect_auth = True
+    set_config_parameter("RESTARTABLE_SLEEPTIME", 2)
+    set_config_parameter("RESTARTABLE_TRIES", 2)
     server = Server(g_ldap_server, get_info=NONE)
     g_ldap_conn = Connection(server,
       g_ldap_binddn, g_ldap_bindpw,
@@ -401,10 +403,6 @@ if __name__ == "__main__":
       client_strategy='RESTARTABLE'
     )
     logging.info("Connected to LDAP-server: " + g_ldap_server)
-  except LDAPOperationResult as e:
-    logging.error("LDAP Exception: " + str(e))
-    sys.exit(1)
-  try:
     timeout = 600
     # Register to have the Milter factory create instances of your class:
     Milter.factory = LdapAclMilter
@@ -419,3 +417,4 @@ if __name__ == "__main__":
     logging.info("Shutdown " + g_milter_name)
   except:
     logging.error("MAIN-EXCEPTION: " + traceback.format_exc())
+    sys.exit(1)
