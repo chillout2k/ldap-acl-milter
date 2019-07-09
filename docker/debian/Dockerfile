@@ -2,7 +2,7 @@ ARG http_proxy
 ARG https_proxy
 FROM debian
 LABEL maintainer="Dominik Chilla <dominik@zwackl.de>"
-LABEL git_repo="https://github.com/chillout2k/ldap-acl-milter/tree/devel"
+LABEL git_repo="https://github.com/chillout2k/ldap-acl-milter"
 
 ENV DEBIAN_FRONTEND=noninteractive \
  TZ=Europe/Berlin
@@ -18,7 +18,8 @@ RUN env; set -ex ; \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
-COPY app/*.py /app/
-COPY entrypoint.sh /entrypoint.sh
+ADD app/*.py /app/
+ADD entrypoint.sh /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
+CMD ["/usr/bin/python3", "/app/ldap-acl-milter.py"]

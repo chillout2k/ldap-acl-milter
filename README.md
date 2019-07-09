@@ -76,6 +76,11 @@ services:
       #MILTER_SOCKET: inet6:8020
       #MILTER_REJECT_MESSAGE: Message rejected due to security policy
       #MILTER_TMPFAIL_MESSAGE: Message temporary rejected. Please try again later ;)
+      # Expect authentication information from LDAP like allowedClientAddr,
+      # allowedSaslUser or allowedx509CN. This is usefull if the milter handles
+      # outbound email traffic, where senders must authenticate before submission.
+      # Default: False (inbound mode)
+      MILTER_EXPECT_AUTH: 'True'
     hostname: ldap-acl-milter
     volumes:
     - "lam_socket:/socket/:rw"
