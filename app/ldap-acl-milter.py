@@ -24,12 +24,15 @@ g_ldap_bindpw = 'TopSecret;-)'
 g_ldap_base = 'ou=users,dc=example,dc=org'
 g_ldap_query = '(&(mail=%rcpt%)(allowedEnvelopeSender=%from%))'
 g_re_domain = re.compile(r'^\S*@(\S+)$')
+# http://emailregex.com/ -> Python
+g_re_email = re.compile(r"(^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$)")
 g_loglevel = logging.INFO
 g_milter_mode = 'test'
 g_milter_default_policy = 'reject'
 g_milter_schema = False
 g_milter_schema_wildcard_domain = False # works only if g_milter_schema == True
 g_milter_expect_auth = False
+g_milter_whitelisted_rcpts = {}
 
 class LdapAclMilter(Milter.Base):
   # Each new connection is handled in an own thread
@@ -115,6 +118,12 @@ class LdapAclMilter(Milter.Base):
     time_start = timer()
     to = to.replace("<","")
     to = to.replace(">","")
+    if to in g_milter_whitelisted_rcpts:
+      time_end = timer()
+      self.env_rcpts.append({
+        "rcpt": to, "action":'whitelisted_rcpt',"time_start":time_start,"time_end":time_end
+      })
+      return Milter.CONTINUE
     m = g_re_domain.match(to)
     if m == None:
       logging.error(self.mconn_id + "/RCPT " +
@@ -394,6 +403,20 @@ if __name__ == "__main__":
     if 'MILTER_EXPECT_AUTH' in os.environ:
       if re.match(r'^true$', os.environ['MILTER_EXPECT_AUTH'], re.IGNORECASE):
         g_milter_expect_auth = True
+    if 'MILTER_WHITELISTED_RCPTS' in os.environ:
+      # A blank separated list is expected
+      whitelisted_rcpts_str = os.environ['MILTER_WHITELISTED_RCPTS']
+#      for whitelisted_rcpt in whitelisted_rcpts_str.split():
+      for whitelisted_rcpt in re.split(',|\s', whitelisted_rcpts_str):
+        if g_re_email.match(whitelisted_rcpt) == None:
+          logging.error(
+            "ENV[MILTER_WHITELISTED_RCPTS]: invalid email address: " +
+            whitelisted_rcpt
+          )
+          sys.exit(1)
+        else:
+          logging.info("ENV[MILTER_WHITELISTED_RCPTS]: " + whitelisted_rcpt)
+          g_milter_whitelisted_rcpts[whitelisted_rcpt] = {}
     set_config_parameter("RESTARTABLE_SLEEPTIME", 2)
     set_config_parameter("RESTARTABLE_TRIES", 2)
     server = Server(g_ldap_server, get_info=NONE)

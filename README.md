@@ -81,6 +81,8 @@ services:
       # outbound email traffic, where senders must authenticate before submission.
       # Default: False (inbound mode)
       MILTER_EXPECT_AUTH: 'True'
+      # Blank or comma separated list of valid email recipients to whitelist,
+      MILTER_WHITELISTED_RCPTS: 'postmaster@example.com,hostmaster@example.org'
     hostname: ldap-acl-milter
     volumes:
     - "lam_socket:/socket/:rw"
