@@ -100,6 +100,9 @@ class LdapAclMilter(Milter.Base):
       logging.error(self.mconn_id + "/FROM sasl_user " + traceback.format_exc())
     mailfrom = mailfrom.replace("<","")
     mailfrom = mailfrom.replace(">","")
+    # BATV (https://tools.ietf.org/html/draft-levine-smtp-batv-01)
+    # Strip out Simple Private Signature (PRVS)
+    mailfrom = re.sub(r"^prvs=.{10}=", '', mailfrom)
     self.env_from = mailfrom
     m = g_re_domain.match(self.env_from)
     if m == None:
