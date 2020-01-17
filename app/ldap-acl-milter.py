@@ -33,6 +33,7 @@ g_milter_schema = False
 g_milter_schema_wildcard_domain = False # works only if g_milter_schema == True
 g_milter_expect_auth = False
 g_milter_whitelisted_rcpts = {}
+g_re_srs = re.compile(r"^SRS0=.+=.+=(\S+)=(\S+)\@.+$")
 
 class LdapAclMilter(Milter.Base):
   # Each new connection is handled in an own thread
@@ -103,6 +104,16 @@ class LdapAclMilter(Milter.Base):
     # BATV (https://tools.ietf.org/html/draft-levine-smtp-batv-01)
     # Strip out Simple Private Signature (PRVS)
     mailfrom = re.sub(r"^prvs=.{10}=", '', mailfrom)
+    # SRS (https://www.libsrs2.org/srs/srs.pdf)
+    m_srs = g_re_srs.match(mailfrom)
+    if m_srs != None:
+      logging.info(self.mconn_id + "/FROM " +
+        "Found SRS-encoded envelope-sender: " + mailfrom
+      )
+      mailfrom = m_srs.group(2) + '@' + m_srs.group(1)
+      logging.info(self.mconn_id + "/FROM " +
+        "SRS envelope-sender replaced with: " + mailfrom
+      )
     self.env_from = mailfrom
     m = g_re_domain.match(self.env_from)
     if m == None:
