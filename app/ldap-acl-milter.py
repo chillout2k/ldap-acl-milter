@@ -1,6 +1,7 @@
+from argparse import Action
 import Milter
 from ldap3 import (
-  Server,ServerPool,Connection,NONE,LDAPOperationResult,set_config_parameter
+  Server, Connection, NONE, set_config_parameter
 )
 import sys
 import traceback
@@ -10,6 +11,8 @@ import string
 import random
 import re
 from timeit import default_timer as timer
+import email.utils
+import authres
 
 # Globals...
 g_milter_name = 'ldap-acl-milter'
@@ -17,7 +20,6 @@ g_milter_socket = '/socket/' + g_milter_name
 g_milter_reject_message = 'Security policy violation!'
 g_milter_tmpfail_message = 'Service temporarily not available! Please try again later.'
 g_ldap_conn = None
-# ...with mostly senseless defaults ;)
 g_ldap_server = 'ldap://127.0.0.1:389'
 g_ldap_binddn = 'cn=ldap-reader,ou=binds,dc=example,dc=org'
 g_ldap_bindpw = 'TopSecret;-)'
@@ -33,123 +35,101 @@ g_milter_schema = False
 g_milter_schema_wildcard_domain = False # works only if g_milter_schema == True
 g_milter_expect_auth = False
 g_milter_whitelisted_rcpts = {}
+g_milter_dkim_enabled = False
+g_milter_trusted_authservid = None
 g_re_srs = re.compile(r"^SRS0=.+=.+=(\S+)=(\S+)\@.+$")
 
 class LdapAclMilter(Milter.Base):
   # Each new connection is handled in an own thread
   def __init__(self):
-    self.time_start = timer()
-    self.ldap_conn = g_ldap_conn
+    # client_addr gets overriden on any connect()
     self.client_addr = None
+
+  def reset(self):
+    self.proto_stage = 'proto-stage'
     self.env_from = None
     self.env_from_domain = None
     self.sasl_user = None
     self.x509_subject = None
     self.x509_issuer = None
-    # recipients list
+    self.queue_id = 'qid-na'
     self.env_rcpts = []
+    self.hdr_from = None
+    self.hdr_from_domain = None
+    self.dkim_valid = False
+    self.passed_dkim_results = []
+    logging.debug("reset(): {}".format(self.__dict__))
     # https://stackoverflow.com/a/2257449
     self.mconn_id = g_milter_name + ': ' + ''.join(
       random.choice(string.ascii_lowercase + string.digits) for _ in range(8)
     )
 
-  # Not registered/used callbacks
-  #@Milter.nocallback
-  #def hello(self, heloname)
-  #  return Milter.CONTINUE
-  @Milter.nocallback
-  def header(self, name, hval):
-    return Milter.CONTINUE
-  @Milter.nocallback
-  def eoh(self):
-    return Milter.CONTINUE
-  @Milter.nocallback
-  def body(self, chunk):
-    return Milter.CONTINUE
+  def milter_action(self, **kwargs):
+    if 'action' not in kwargs:
+      raise Exception("'action' kwarg is mandatory!")
+    message = None
+    smfir = None
+    smtp_code = None
+    smtp_ecode = None
+    if kwargs['action'] == 'reject':
+      message = g_milter_reject_message
+      smtp_code = '550'
+      smtp_ecode = '5.7.1'
+      smfir = Milter.REJECT
+    elif kwargs['action'] == 'tmpfail':
+      message = g_milter_tmpfail_message
+      smtp_code = '450'
+      smtp_ecode = '4.7.1'
+      smfir = Milter.TEMPFAIL
+    elif kwargs['action'] == 'continue':
+      message = 'continue'
+      smfir = Milter.CONTINUE
+    else:
+      raise Exception("Invalid 'action': {}".format(kwargs['action']))
+    # override message
+    if 'message' in kwargs:
+      message = kwargs['message']
+    # prepend queue-id to message if it´s already available (DATA and later)
+    if self.queue_id:
+      message = "queue_id: {0} - {1}".format(self.queue_id, message)
+    # append reason to message
+    if 'reason' in kwargs:
+      message = "{0} - reason: {1}".format(message, kwargs['reason'])
+    if kwargs['action'] == 'reject' or kwargs['action'] == 'tmpfail':
+      self.setreply(smtp_code, smtp_ecode, message)
+      logging.info(self.mconn_id + "/" +
+       self.proto_stage + ": milter_action={0} message={1}".format(kwargs['action'], message)
+      )
+    return smfir
 
-  def connect(self, IPname, family, hostaddr):
-    self.client_addr = hostaddr[0]
+  def check_policy(self, from_addr, rcpt_addr):
     logging.debug(self.mconn_id +
-      "/CONNECT client_addr=[" + self.client_addr + "]:" + str(hostaddr[1])
+      " /CHECK_POLICY/{0} from={1} rcpt={2}".format(
+        self.proto_stage, from_addr, rcpt_addr
+      )
     )
-    return Milter.CONTINUE
-
-  def envfrom(self, mailfrom, *str):
-    try:
-      # this may fail, if no x509 client certificate was used.
-      # postfix only passes this macro to milters if the TLS connection
-      # with the authenticating client was trusted in a x509 manner!
-      # http://postfix.1071664.n5.nabble.com/verification-levels-and-Milter-tp91634p91638.html
-      # Unfortunately, postfix only passes the CN-field of the subject/issuer DN :-/
-      x509_subject = self.getsymval('{cert_subject}')
-      if x509_subject != None:
-        self.x509_subject = x509_subject
-        logging.info(self.mconn_id + "/FROM x509_subject=" + self.x509_subject)
-      x509_issuer = self.getsymval('{cert_issuer}')
-      if x509_issuer != None:
-        self.x509_issuer = x509_issuer
-        logging.info(self.mconn_id + "/FROM x509_issuer=" + self.x509_issuer)
-    except:
-      logging.error(self.mconn_id + "/FROM x509 " + traceback.format_exc())
-    try:
-      # this may fail, if no SASL authentication preceded
-      sasl_user = self.getsymval('{auth_authen}')
-      if sasl_user != None:
-        self.sasl_user = sasl_user
-        logging.info(self.mconn_id + "/FROM sasl_user=" + self.sasl_user)
-    except:
-      logging.error(self.mconn_id + "/FROM sasl_user " + traceback.format_exc())
-    mailfrom = mailfrom.replace("<","")
-    mailfrom = mailfrom.replace(">","")
-    # BATV (https://tools.ietf.org/html/draft-levine-smtp-batv-01)
-    # Strip out Simple Private Signature (PRVS)
-    mailfrom = re.sub(r"^prvs=.{10}=", '', mailfrom)
-    # SRS (https://www.libsrs2.org/srs/srs.pdf)
-    m_srs = g_re_srs.match(mailfrom)
-    if m_srs != None:
-      logging.info(self.mconn_id + "/FROM " +
-        "Found SRS-encoded envelope-sender: " + mailfrom
-      )
-      mailfrom = m_srs.group(2) + '@' + m_srs.group(1)
-      logging.info(self.mconn_id + "/FROM " +
-        "SRS envelope-sender replaced with: " + mailfrom
-      )
-    self.env_from = mailfrom
-    m = g_re_domain.match(self.env_from)
+    if rcpt_addr in g_milter_whitelisted_rcpts:
+      return self.milter_action(action = 'continue')
+    m = g_re_domain.match(from_addr)
     if m == None:
-      logging.error(self.mconn_id + "/FROM " +
-        "Could not determine domain of 5321.from=" + self.env_from
+      return self.milter_action(
+        action = 'tmpfail',
+        reason = "Could not determine domain of from={}".format(from_addr)
       )
-      self.setreply('450','4.7.1', g_milter_tmpfail_message)
-      return Milter.TEMPFAIL
-    self.env_from_domain = m.group(1)
+    from_domain = m.group(1)
     logging.debug(self.mconn_id +
-      "/FROM env_from_domain=" + self.env_from_domain
+      "/{0} from_domain={1}".format(self.queue_id, from_domain)
     )
-    return Milter.CONTINUE
-
-  def envrcpt(self, to, *str):
-    time_start = timer()
-    to = to.replace("<","")
-    to = to.replace(">","")
-    if to in g_milter_whitelisted_rcpts:
-      time_end = timer()
-      self.env_rcpts.append({
-        "rcpt": to, "action":'whitelisted_rcpt',"time_start":time_start,"time_end":time_end
-      })
-      return Milter.CONTINUE
-    m = g_re_domain.match(to)
+    m = g_re_domain.match(rcpt_addr)
     if m == None:
-      logging.error(self.mconn_id + "/RCPT " +
-        "Could not determine domain of 5321.to: " + to
+      return self.milter_action(
+        action = 'tmpfail',
+        reason = "Could not determine domain of rcpt={}".format(rcpt_addr)
       )
-      self.setreply('450','4.7.1', g_milter_tmpfail_message)
-      return Milter.TEMPFAIL
     rcpt_domain = m.group(1)
     logging.debug(self.mconn_id +
-      "/RCPT rcpt_domain=" + rcpt_domain
+      "/{0} rcpt_domain={1}".format(self.queue_id, rcpt_domain)
     )
-    time_end = None
     try:
       if g_milter_schema == True:
         # LDAP-ACL-Milter schema
@@ -181,178 +161,298 @@ class LdapAclMilter(Milter.Base):
           # be ASCII-HEX encoded '\2a' (42 in decimal => answer to everything)
           # for proper use in LDAP queries.
           # In this case *@<domain> cannot be a real address!
-          if re.match(r'^\*@.+$', self.env_from, re.IGNORECASE):
-            logging.info(self.mconn_id + "/RCPT REJECT " +
-              "Literal wildcard sender (*@<domain>) is not " +
-              "allowed in wildcard mode!"
+          if re.match(r'^\*@.+$', from_addr, re.IGNORECASE):
+            return self.milter_action(
+              action = 'reject',
+              reason = "Literal wildcard sender (*@<domain>) is not " +
+                "allowed in wildcard mode!"
             )
-            self.setreply('550','5.7.1',
-              g_milter_reject_message + ' (' + self.mconn_id + ')'
+          if re.match(r'^\*@.+$', rcpt_addr, re.IGNORECASE):
+            return self.milter_action(
+              action = 'reject',
+              reason = "Literal wildcard recipient (*@<domain>) is not " +
+                "allowed in wildcard mode!"
             )
-            return Milter.REJECT
-          if re.match(r'^\*@.+$', to, re.IGNORECASE):
-            logging.info(self.mconn_id + "/RCPT REJECT " +
-              "Literal wildcard recipient (*@<domain>) is not " +
-              "allowed in wildcard mode!"
-            )
-            self.setreply('550','5.7.1',
-              g_milter_reject_message + ' (' + self.mconn_id + ')'
-            )
-            return Milter.REJECT
-          self.ldap_conn.search(g_ldap_base,
+          g_ldap_conn.search(g_ldap_base,
             "(&" +
               auth_method +
               "(|"+
-                "(allowedRcpts="+to+")"+
-                "(allowedRcpts=\\2a@"+rcpt_domain+")"+
+                "(allowedRcpts=" + rcpt_addr + ")"+
+                "(allowedRcpts=\\2a@" + rcpt_domain + ")"+
                 "(allowedRcpts=\\2a@\\2a)"+
               ")"+
               "(|"+
-                "(allowedSenders="+self.env_from+")"+
-                "(allowedSenders=\\2a@"+self.env_from_domain+")"+
+                "(allowedSenders=" + from_addr + ")"+
+                "(allowedSenders=\\2a@" + from_domain + ")"+
                 "(allowedSenders=\\2a@\\2a)"+
               ")"+
             ")",
             attributes=['policyID']
           )
         else:
+          # Wildcard-domain DISABLED
           # Asterisk must be ASCII-HEX encoded for LDAP queries
-          query_from = self.env_from.replace("*","\\2a")
-          query_to = to.replace("*","\\2a")
-          self.ldap_conn.search(g_ldap_base,
+          query_from = from_addr.replace("*","\\2a")
+          query_to = rcpt_addr.replace("*","\\2a")
+          g_ldap_conn.search(g_ldap_base,
             "(&" +
               auth_method +
-              "(allowedRcpts="+query_to+")" +
-              "(allowedSenders="+query_from+")" +
+              "(allowedRcpts=" + query_to + ")" +
+              "(allowedSenders=" + query_from + ")" +
             ")",
             attributes=['policyID']
           )
-        time_end = timer()
-        if len(self.ldap_conn.entries) == 0:
+        if len(g_ldap_conn.entries) == 0:
           # Policy not found in LDAP
-          self.env_rcpts.append({
-            "rcpt": to, "action": g_milter_reject_message,
-            "time_start":time_start, "time_end":time_end
-          })
           if g_milter_expect_auth == True:
-            logging.info(self.mconn_id + "/RCPT " + "policy mismatch "
-              "5321.from=" + self.env_from + ", 5321.rcpt=" + to +
+            logging.info(self.mconn_id + " " + "policy mismatch "
+              "from=" + from_addr + ", rcpt=" + rcpt_addr +
               ", auth_method=" + auth_method
             )
           else:
-            logging.info(self.mconn_id + "/RCPT " + "policy mismatch "
-              "5321.from=" + self.env_from + ", 5321.rcpt=" + to
+            logging.info(self.mconn_id + " " + "policy mismatch "
+              "from=" + from_addr + ", rcpt=" + rcpt_addr
             )
           if g_milter_mode == 'reject':
-            logging.info(self.mconn_id + "/RCPT REJECT "
-              + g_milter_reject_message
+            return self.milter_action(
+              action = 'reject',
+              reason = "policy not found!"
             )
-            self.setreply('550','5.7.1',
-              g_milter_reject_message + ' (' + self.mconn_id + ')'
-            )
-            return Milter.REJECT
           else:
-            logging.info(self.mconn_id + "/RCPT TEST_MODE " +
+            logging.info(self.mconn_id + " TEST_MODE " +
               g_milter_reject_message
             )
-            return Milter.CONTINUE
-        elif len(self.ldap_conn.entries) == 1:
+        elif len(g_ldap_conn.entries) == 1:
           # Policy found in LDAP, but which one?
-          entry = self.ldap_conn.entries[0]
+          entry = g_ldap_conn.entries[0]
           logging.info(self.mconn_id +
-            "/RCPT Policy match: " + entry.policyID.value
+            " Policy match: " + entry.policyID.value
           )
-        elif len(self.ldap_conn.entries) > 1:
+        elif len(g_ldap_conn.entries) > 1:
           # Something went wrong!? There shouldn´t be more than one entries!
-          logging.warn(self.mconn_id + "/RCPT More than one policies found! "+
-             "5321.from=" + self.env_from + ", 5321.rcpt=" + to +
-             ", auth_method=" + auth_method
+          logging.warning(self.mconn_id + " More than one policies found! "+
+            "from=" + from_addr + ", rcpt=" + rcpt_addr +
+            ", auth_method=" + auth_method
           )
-          self.setreply('550','5.7.1',
-            g_milter_reject_message + ' (' + self.mconn_id + ')'
-          )
-          return Milter.REJECT
+          return self.milter_action(action = 'reject')
       else:
         # Custom LDAP schema
         # 'build' a LDAP query per recipient
         # replace all placeholders in query templates
-        query = g_ldap_query.replace("%rcpt%",to)
-        query = query.replace("%from%", self.env_from)
+        query = g_ldap_query.replace("%rcpt%", rcpt_addr)
+        query = query.replace("%from%", from_addr)
         query = query.replace("%client_addr%", self.client_addr)
         query = query.replace("%sasl_user%", self.sasl_user)
-        query = query.replace("%from_domain%", self.env_from_domain)
+        query = query.replace("%from_domain%", from_domain)
         query = query.replace("%rcpt_domain%", rcpt_domain)
-        logging.debug(self.mconn_id + "/RCPT " + query)
-        self.ldap_conn.search(g_ldap_base, query)
-        time_end = timer()
-        if len(self.ldap_conn.entries) == 0:
-          self.env_rcpts.append({
-            "rcpt": to, "action": g_milter_reject_message,
-            "time_start":time_start, "time_end":time_end
-          })
-          logging.info(self.mconn_id + "/RCPT " + "policy mismatch "
-            "5321.from: " + self.env_from + " and 5321.rcpt: " + to
+        logging.debug(self.mconn_id + " " + query)
+        g_ldap_conn.search(g_ldap_base, query)
+        if len(g_ldap_conn.entries) == 0:
+          logging.info(self.mconn_id + " " + "policy mismatch "
+            "from: " + from_addr + " and rcpt: " + rcpt_addr
           )
           if g_milter_mode == 'reject':
-            logging.info(self.mconn_id + "/RCPT REJECT " + g_milter_reject_message)
-            self.setreply('550','5.7.1',
-              g_milter_reject_message + ' (' + self.mconn_id + ')'
+            return self.milter_action(
+              action = 'reject',
+              reason = 'policy mismatch'
             )
-            return Milter.REJECT
           else:
-            logging.info(self.mconn_id + "/RCPT TEST_MODE " +
+            logging.info(self.mconn_id + " TEST_MODE " +
               g_milter_reject_message
             )
-            return Milter.CONTINUE
     except LDAPOperationResult as e:
-      logging.warn(self.mconn_id + "/RCPT LDAP: " + str(e))
-      self.setreply('451', '4.7.1', g_milter_tmpfail_message)
-      return Milter.TEMPFAIL
+      logging.error(self.mconn_id + " LDAP: " + str(e))
+      return self.milter_action(action = 'tmpfail')
     except:
-      logging.error(self.mconn_id + "/RCPT LDAP: " + traceback.format_exc())
-      self.setreply('451', '4.7.1', g_milter_tmpfail_message)
-      return Milter.TEMPFAIL
-    self.env_rcpts.append({
-      "rcpt": to, "action":'pass',"time_start":time_start,"time_end":time_end
-    })
-    return Milter.CONTINUE
+      logging.error(self.mconn_id + " LDAP: " + traceback.format_exc())
+      return self.milter_action(action = 'tmpfail')
+    return self.milter_action(action = 'continue')
 
-  def data(self):
-    # A queue-id will be generated after the first accepted RCPT TO
-    # and therefore not available until DATA command
-    self.queue_id = self.getsymval('i')
-    try:
-      for rcpt in self.env_rcpts:
-        duration = rcpt['time_end'] - rcpt['time_start']
-        logging.info(self.mconn_id + "/DATA " + self.queue_id +
-          ": 5321.from=" + self.env_from + " 5321.rcpt=" +
-          rcpt['rcpt'] + " action=" + rcpt['action'] +
-          " duration=" + str(duration) + "sec."
+  # Not registered/used callbacks
+  @Milter.nocallback
+  def eoh(self):
+    return self.milter_action(action = 'continue')
+  @Milter.nocallback
+  def body(self, chunk):
+    return self.milter_action(action = 'continue')
+
+  def connect(self, IPname, family, hostaddr):
+    self.reset()
+    self.proto_stage = 'CONNECT'
+    self.client_addr = hostaddr[0]
+    logging.debug(self.mconn_id +
+      "/CONNECT client_addr=[" + self.client_addr + "]:" + str(hostaddr[1])
+    )
+    return self.milter_action(action = 'continue')
+
+  def envfrom(self, mailfrom, *str):
+    self.reset()
+    self.proto_stage = 'FROM'
+    if g_milter_expect_auth:
+      try:
+        # this may fail, if no x509 client certificate was used.
+        # postfix only passes this macro to milters if the TLS connection
+        # with the authenticating client was trusted in a x509 manner!
+        # http://postfix.1071664.n5.nabble.com/verification-levels-and-Milter-tp91634p91638.html
+        # Unfortunately, postfix only passes the CN-field of the subject/issuer DN :-/
+        x509_subject = self.getsymval('{cert_subject}')
+        if x509_subject != None:
+          self.x509_subject = x509_subject
+          logging.debug(self.mconn_id + "/FROM x509_subject=" + self.x509_subject)
+        else:
+          logging.debug(self.mconn_id + "/FROM No x509_subject registered")
+        x509_issuer = self.getsymval('{cert_issuer}')
+        if x509_issuer != None:
+          self.x509_issuer = x509_issuer
+          logging.debug(self.mconn_id + "/FROM x509_issuer=" + self.x509_issuer)
+        else:
+          logging.debug(self.mconn_id + "/FROM No x509_issuer registered")
+      except:
+        logging.error(self.mconn_id + "/FROM x509 " + traceback.format_exc())
+      try:
+        # this may fail, if no SASL authentication preceded
+        sasl_user = self.getsymval('{auth_authen}')
+        if sasl_user != None:
+          self.sasl_user = sasl_user
+          logging.debug(self.mconn_id + "/FROM sasl_user=" + self.sasl_user)
+        else:
+          logging.debug(self.mconn_id + "/FROM No sasl_user registered")
+      except:
+        logging.error(self.mconn_id + "/FROM sasl_user " + traceback.format_exc())
+      logging.info(self.mconn_id + "/FROM auth: " + 
+        "client_ip={0}, x509_subject={1}, x509_issuer={2}, sasl_user={3}".format(
+          self.client_addr, self.x509_subject, self.x509_issuer, self.sasl_user
         )
-    except:
-      logging.warn(self.mconn_id + "/DATA " + self.queue_id +
-        ": " + traceback.format_exc())
-      self.setreply('451', '4.7.1', g_milter_tmpfail_message)
-      return Milter.TEMPFAIL
-    return Milter.CONTINUE
+      )
+    mailfrom = mailfrom.replace("<","")
+    mailfrom = mailfrom.replace(">","")
+    # BATV (https://tools.ietf.org/html/draft-levine-smtp-batv-01)
+    # Strip out Simple Private Signature (PRVS)
+    mailfrom = re.sub(r"^prvs=.{10}=", '', mailfrom)
+    # SRS (https://www.libsrs2.org/srs/srs.pdf)
+    m_srs = g_re_srs.match(mailfrom)
+    if m_srs != None:
+      logging.info(self.mconn_id + "/FROM " +
+        "Found SRS-encoded envelope-sender: " + mailfrom
+      )
+      mailfrom = m_srs.group(2) + '@' + m_srs.group(1)
+      logging.info(self.mconn_id + "/FROM " +
+        "SRS envelope-sender replaced with: " + mailfrom
+      )
+    self.env_from = mailfrom.lower()
+    logging.debug(self.mconn_id + "/FROM 5321.from={}".format(self.env_from))
+    m = g_re_domain.match(self.env_from)
+    if m == None:
+      return self.milter_action(
+        action = 'tmpfail',
+        reason = "Could not determine domain of 5321.from=" + self.env_from
+      )
+    self.env_from_domain = m.group(1)
+    logging.debug(self.mconn_id +
+      "/FROM 5321.from_domain={}".format(self.env_from_domain)
+    )
+    return self.milter_action(action = 'continue')
+
+  def envrcpt(self, to, *str):
+    self.proto_stage = 'RCPT'
+    to = to.replace("<","")
+    to = to.replace(">","")
+    to = to.lower()
+    logging.debug(self.mconn_id +
+      "/RCPT env_rcpt={}".format(to)
+    )
+    if g_milter_dkim_enabled:
+      # Collect all envelope-recipients for later
+      # investigation (EOM). Do not perform any 
+      # policy action at this protocol phase.
+      self.env_rcpts.append(to)
+    else:
+      return self.check_policy(self.env_from, to)
+    return self.milter_action(action = 'continue')
+
+  def header(self, hname, hval):
+    self.proto_stage = 'HDR'
+    self.queue_id = self.getsymval('i')
+    if g_milter_dkim_enabled == True:
+      # Parse RFC-5322-From header
+      if(hname.lower() == "From".lower()):
+        hdr_5322_from = email.utils.parseaddr(hval)
+        self.hdr_from = hdr_5322_from[1].lower()
+        m = re.match(g_re_domain, self.hdr_from)
+        if m is None:
+          return self.milter_action(
+            action = 'reject',
+            reason = "Could not determine domain-part of 5322.from=" + self.hdr_from
+          )
+        self.hdr_from_domain = m.group(1)
+        logging.info(self.mconn_id + "/" + str(self.queue_id) +
+          "/HDR: 5322.from={0}, 5322.from_domain={1}".format(
+            self.hdr_from, self.hdr_from_domain
+          )
+        )
+      # Parse RFC-7601 Authentication-Results header
+      elif(hname.lower() == "Authentication-Results".lower()):
+        ar = None
+        try:
+          ar = authres.AuthenticationResultsHeader.parse(
+            "{0}: {1}".format(hname, hval)
+          )
+          if ar.authserv_id.lower() == g_milter_trusted_authservid.lower():
+            for ar_result in ar.results:
+              if ar_result.method == 'dkim':
+                if ar_result.result == 'pass':
+                  self.passed_dkim_results.append({
+                    "sdid": ar_result.header_d.lower()
+                  })
+                  logging.debug(self.mconn_id + "/" + str(self.queue_id) +
+                    "/HDR: DKIM passed SDID {0}".format(ar_result.header_d)
+                  )
+                  self.dkim_valid = True
+          else:
+            logging.debug(self.mconn_id + "/" + str(self.queue_id) +
+              "/HDR: Ignoring authentication results of {0}".format(ar.authserv_id)
+            )
+        except Exception as e:
+          logging.info(self.mconn_id + "/" + str(self.queue_id) +
+            "/HDR: AR-parse exception: {0}".format(str(e))
+          )
+    return self.milter_action(action = 'continue')
 
   def eom(self):
-    # EOM is not optional and thus, always called by MTA
-    time_end = timer()
-    duration = time_end - self.time_start
-    logging.info(self.mconn_id + "/EOM " + self.queue_id +
-      " processed in " + str(duration) + " sec."
-    )
-    return Milter.CONTINUE
+    self.proto_stage = 'EOM'
+    if g_milter_dkim_enabled == True:
+      accept_message = True
+      for rcpt in self.env_rcpts:
+        logging.debug(self.mconn_id +
+          "/{0}/EOM rcpt={1}".format(self.queue_id, rcpt)
+        )
+        # Check 5321.sender against policy
+        ret = self.check_policy(self.env_from, rcpt)
+        if ret != Milter.CONTINUE:
+          if self.dkim_valid:
+            # Check 5322.sender against policy
+            ret = self.check_policy(self.hdr_from, rcpt)
+            if ret != Milter.CONTINUE:
+              accept_message = False
+          else:
+            accept_message = False
+      if accept_message == False:
+        return self.milter_action(
+          action = 'reject',
+          reason = 'sender unauthorized!'
+        )
+    return self.milter_action(action = 'continue')
 
   def abort(self):
     # Client disconnected prematurely
-    return Milter.CONTINUE
+    self.proto_stage = 'ABORT'
+    return self.milter_action(action = 'continue')
 
   def close(self):
     # Always called, even when abort is called.
     # Clean up any external resources here.
-    return Milter.CONTINUE
+    self.proto_stage = 'CLOSE'
+    return self.milter_action(action = 'continue')
 
 if __name__ == "__main__":
   try:
@@ -377,7 +477,7 @@ if __name__ == "__main__":
       if re.match(r'^reject|permit$',os.environ['MILTER_DEFAULT_POLICY'], re.IGNORECASE):
         g_milter_default_policy = str(os.environ['MILTER_DEFAULT_POLICY']).lower()
       else:
-        logging.warn("MILTER_DEFAULT_POLICY invalid value: " +
+        logging.warning("MILTER_DEFAULT_POLICY invalid value: " +
           os.environ['MILTER_DEFAULT_POLICY']
         )
     if 'MILTER_NAME' in os.environ:
@@ -420,7 +520,6 @@ if __name__ == "__main__":
     if 'MILTER_WHITELISTED_RCPTS' in os.environ:
       # A blank separated list is expected
       whitelisted_rcpts_str = os.environ['MILTER_WHITELISTED_RCPTS']
-#      for whitelisted_rcpt in whitelisted_rcpts_str.split():
       for whitelisted_rcpt in re.split(',|\s', whitelisted_rcpts_str):
         if g_re_email.match(whitelisted_rcpt) == None:
           logging.error(
@@ -431,6 +530,15 @@ if __name__ == "__main__":
         else:
           logging.info("ENV[MILTER_WHITELISTED_RCPTS]: " + whitelisted_rcpt)
           g_milter_whitelisted_rcpts[whitelisted_rcpt] = {}
+    if 'MILTER_DKIM_ENABLED' in os.environ:
+      g_milter_dkim_enabled = True
+      if 'MILTER_TRUSTED_AUTHSERVID' in os.environ:
+        g_milter_trusted_authservid = os.environ['MILTER_TRUSTED_AUTHSERVID'].lower()
+        logging.info("ENV[MILTER_TRUSTED_AUTHSERVID]: {0}".format(g_milter_trusted_authservid))
+      else:
+        logging.error("ENV[MILTER_TRUSTED_AUTHSERVID] is mandatory!")
+        sys.exit(1)
+    logging.info("ENV[MILTER_DKIM_ENABLED]: {0}".format(g_milter_dkim_enabled))
     set_config_parameter("RESTARTABLE_SLEEPTIME", 2)
     set_config_parameter("RESTARTABLE_TRIES", 2)
     server = Server(g_ldap_server, get_info=NONE)
