@@ -3,6 +3,7 @@ import Milter
 from ldap3 import (
   Server, Connection, NONE, set_config_parameter
 )
+from ldap3.core.exceptions import LDAPException
 import sys
 import traceback
 import os
@@ -39,6 +40,16 @@ g_milter_dkim_enabled = False
 g_milter_trusted_authservid = None
 g_re_srs = re.compile(r"^SRS0=.+=.+=(\S+)=(\S+)\@.+$")
 
+class LamException(Exception):
+  def __init__(self, message="General exception message"):
+    self.message = message
+
+class LamSoftException(LamException):
+  pass
+
+class LamHardException(LamException):
+  pass
+
 class LdapAclMilter(Milter.Base):
   # Each new connection is handled in an own thread
   def __init__(self):
@@ -48,15 +59,15 @@ class LdapAclMilter(Milter.Base):
   def reset(self):
     self.proto_stage = 'proto-stage'
     self.env_from = None
-    self.env_from_domain = None
     self.sasl_user = None
     self.x509_subject = None
     self.x509_issuer = None
-    self.queue_id = 'qid-na'
+    self.queue_id = 'invalid'
     self.env_rcpts = []
     self.hdr_from = None
     self.hdr_from_domain = None
     self.dkim_valid = False
+    self.dkim_aligned = False
     self.passed_dkim_results = []
     logging.debug("reset(): {}".format(self.__dict__))
     # https://stackoverflow.com/a/2257449
@@ -90,8 +101,8 @@ class LdapAclMilter(Milter.Base):
     if 'message' in kwargs:
       message = kwargs['message']
     # prepend queue-id to message if it´s already available (DATA and later)
-    if self.queue_id:
-      message = "queue_id: {0} - {1}".format(self.queue_id, message)
+    if self.queue_id != 'invalid':
+      message = " queue_id: {0} - {1}".format(self.queue_id, message)
     # append reason to message
     if 'reason' in kwargs:
       message = "{0} - reason: {1}".format(message, kwargs['reason'])
@@ -103,29 +114,26 @@ class LdapAclMilter(Milter.Base):
     return smfir
 
   def check_policy(self, from_addr, rcpt_addr):
-    logging.debug(self.mconn_id +
-      " /CHECK_POLICY/{0} from={1} rcpt={2}".format(
+    logging.info(self.mconn_id +
+      "/{0} from={1} rcpt={2}".format(
         self.proto_stage, from_addr, rcpt_addr
       )
     )
-    if rcpt_addr in g_milter_whitelisted_rcpts:
-      return self.milter_action(action = 'continue')
     m = g_re_domain.match(from_addr)
     if m == None:
-      return self.milter_action(
-        action = 'tmpfail',
-        reason = "Could not determine domain of from={}".format(from_addr)
+      logging.info(self.mconn_id +
+        "/{0} Could not determine domain of from={1}".format(
+          self.proto_stage, from_addr
+        )
       )
+      raise LamSoftException()
     from_domain = m.group(1)
     logging.debug(self.mconn_id +
       "/{0} from_domain={1}".format(self.queue_id, from_domain)
     )
     m = g_re_domain.match(rcpt_addr)
     if m == None:
-      return self.milter_action(
-        action = 'tmpfail',
-        reason = "Could not determine domain of rcpt={}".format(rcpt_addr)
-      )
+      raise LamSoftException("Could not determine domain of rcpt={}".format(rcpt_addr))
     rcpt_domain = m.group(1)
     logging.debug(self.mconn_id +
       "/{0} rcpt_domain={1}".format(self.queue_id, rcpt_domain)
@@ -162,16 +170,14 @@ class LdapAclMilter(Milter.Base):
           # for proper use in LDAP queries.
           # In this case *@<domain> cannot be a real address!
           if re.match(r'^\*@.+$', from_addr, re.IGNORECASE):
-            return self.milter_action(
-              action = 'reject',
-              reason = "Literal wildcard sender (*@<domain>) is not " +
-                "allowed in wildcard mode!"
+            raise LamHardException(
+              "Literal wildcard sender (*@<domain>) is not " +
+              "allowed in wildcard mode!"
             )
           if re.match(r'^\*@.+$', rcpt_addr, re.IGNORECASE):
-            return self.milter_action(
-              action = 'reject',
-              reason = "Literal wildcard recipient (*@<domain>) is not " +
-                "allowed in wildcard mode!"
+            raise LamHardException(
+              "Literal wildcard recipient (*@<domain>) is not " +
+              "allowed in wildcard mode!"
             )
           g_ldap_conn.search(g_ldap_base,
             "(&" +
@@ -214,10 +220,7 @@ class LdapAclMilter(Milter.Base):
               "from=" + from_addr + ", rcpt=" + rcpt_addr
             )
           if g_milter_mode == 'reject':
-            return self.milter_action(
-              action = 'reject',
-              reason = "policy not found!"
-            )
+            raise LamHardException("policy not found!")
           else:
             logging.info(self.mconn_id + " TEST_MODE " +
               g_milter_reject_message
@@ -226,7 +229,7 @@ class LdapAclMilter(Milter.Base):
           # Policy found in LDAP, but which one?
           entry = g_ldap_conn.entries[0]
           logging.info(self.mconn_id +
-            " Policy match: " + entry.policyID.value
+            "/{0} Policy match: {1}".format(self.proto_stage, entry.policyID.value)
           )
         elif len(g_ldap_conn.entries) > 1:
           # Something went wrong!? There shouldn´t be more than one entries!
@@ -234,7 +237,7 @@ class LdapAclMilter(Milter.Base):
             "from=" + from_addr + ", rcpt=" + rcpt_addr +
             ", auth_method=" + auth_method
           )
-          return self.milter_action(action = 'reject')
+          raise LamHardException("More than one policies found!")
       else:
         # Custom LDAP schema
         # 'build' a LDAP query per recipient
@@ -252,20 +255,14 @@ class LdapAclMilter(Milter.Base):
             "from: " + from_addr + " and rcpt: " + rcpt_addr
           )
           if g_milter_mode == 'reject':
-            return self.milter_action(
-              action = 'reject',
-              reason = 'policy mismatch'
-            )
+            raise LamHardException("policy mismatch")
           else:
             logging.info(self.mconn_id + " TEST_MODE " +
               g_milter_reject_message
             )
-    except LDAPOperationResult as e:
+    except LDAPException as e:
       logging.error(self.mconn_id + " LDAP: " + str(e))
-      return self.milter_action(action = 'tmpfail')
-    except:
-      logging.error(self.mconn_id + " LDAP: " + traceback.format_exc())
-      return self.milter_action(action = 'tmpfail')
+      raise LamSoftException(" LDAP: " + str(e)) from e;
     return self.milter_action(action = 'continue')
 
   # Not registered/used callbacks
@@ -347,10 +344,6 @@ class LdapAclMilter(Milter.Base):
         action = 'tmpfail',
         reason = "Could not determine domain of 5321.from=" + self.env_from
       )
-    self.env_from_domain = m.group(1)
-    logging.debug(self.mconn_id +
-      "/FROM 5321.from_domain={}".format(self.env_from_domain)
-    )
     return self.milter_action(action = 'continue')
 
   def envrcpt(self, to, *str):
@@ -361,13 +354,23 @@ class LdapAclMilter(Milter.Base):
     logging.debug(self.mconn_id +
       "/RCPT env_rcpt={}".format(to)
     )
+    if to in g_milter_whitelisted_rcpts:
+      return self.milter_action(action = 'continue')
     if g_milter_dkim_enabled:
       # Collect all envelope-recipients for later
       # investigation (EOM). Do not perform any 
       # policy action at this protocol phase.
       self.env_rcpts.append(to)
     else:
-      return self.check_policy(self.env_from, to)
+      try:
+        return self.check_policy(self.env_from, to)
+      except LamSoftException as e:
+        return self.milter_action(action = 'tmpfail')
+      except LamHardException as e:
+        return self.milter_action(
+          action = 'reject',
+          reason = e.message
+        )
     return self.milter_action(action = 'continue')
 
   def header(self, hname, hval):
@@ -399,13 +402,11 @@ class LdapAclMilter(Milter.Base):
           )
           if ar.authserv_id.lower() == g_milter_trusted_authservid.lower():
             for ar_result in ar.results:
-              if ar_result.method == 'dkim':
-                if ar_result.result == 'pass':
-                  self.passed_dkim_results.append({
-                    "sdid": ar_result.header_d.lower()
-                  })
+              if ar_result.method.lower() == 'dkim':
+                if ar_result.result.lower() == 'pass':
+                  self.passed_dkim_results.append(ar_result.header_d.lower())
                   logging.debug(self.mconn_id + "/" + str(self.queue_id) +
-                    "/HDR: DKIM passed SDID {0}".format(ar_result.header_d)
+                    "/HDR: dkim=pass sdid={0}".format(ar_result.header_d)
                   )
                   self.dkim_valid = True
           else:
@@ -420,27 +421,45 @@ class LdapAclMilter(Milter.Base):
 
   def eom(self):
     self.proto_stage = 'EOM'
-    if g_milter_dkim_enabled == True:
-      accept_message = True
+    if g_milter_dkim_enabled:
+      if self.dkim_valid:
+        # There is at least one valid DKIM signature!
+        # Check if one of them is also aligned
+        for passed_dkim_sdid in self.passed_dkim_results:
+          if self.hdr_from_domain.lower() == passed_dkim_sdid.lower():
+            self.dkim_aligned = True
+            logging.info(self.mconn_id + "/" + str(self.queue_id) +
+              "/EOM: Found aligned DKIM signature for SDID: {0}".format(
+                passed_dkim_sdid
+              ) 
+            )
+      reject_message = False
       for rcpt in self.env_rcpts:
-        logging.debug(self.mconn_id +
-          "/{0}/EOM rcpt={1}".format(self.queue_id, rcpt)
-        )
-        # Check 5321.sender against policy
-        ret = self.check_policy(self.env_from, rcpt)
-        if ret != Milter.CONTINUE:
-          if self.dkim_valid:
-            # Check 5322.sender against policy
-            ret = self.check_policy(self.hdr_from, rcpt)
-            if ret != Milter.CONTINUE:
-              accept_message = False
+        try:
+          # Check 5321.sender against policy
+          self.check_policy(self.env_from, rcpt)
+        except LamSoftException as e:
+          return self.milter_action(action = 'tmpfail')
+        except LamHardException as e:
+          if self.dkim_aligned:
+            try:
+              # Check 5322.sender against policy
+              self.check_policy(self.hdr_from, rcpt)
+              logging.info(self.mconn_id +
+                "/{0}/{1} from={2} authorized by DKIM signature".format(
+                  self.queue_id, self.proto_stage, self.hdr_from
+                )
+              )
+            except LamHardException as e:
+              reject_message = True
           else:
-            accept_message = False
-      if accept_message == False:
-        return self.milter_action(
-          action = 'reject',
-          reason = 'sender unauthorized!'
-        )
+            reject_message = True
+
+        if reject_message:
+          return self.milter_action(
+            action = 'reject',
+            reason = 'EOM - Policy mismatch! All recipients were rejected!'
+          )
     return self.milter_action(action = 'continue')
 
   def abort(self):
