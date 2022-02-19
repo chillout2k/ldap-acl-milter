@@ -10,7 +10,6 @@ import logging
 import string
 import random
 import re
-from timeit import default_timer as timer
 import email.utils
 import authres
 
@@ -29,7 +28,6 @@ g_re_domain = re.compile(r'^\S*@(\S+)$')
 # http://emailregex.com/ -> Python
 g_re_email = re.compile(r"(^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$)")
 g_milter_mode = 'test'
-g_milter_default_policy = 'reject'
 g_milter_schema = False
 g_milter_schema_wildcard_domain = False # works only if g_milter_schema == True
 g_milter_expect_auth = False
@@ -37,6 +35,8 @@ g_milter_whitelisted_rcpts = {}
 g_milter_dkim_enabled = False
 g_milter_trusted_authservid = None
 g_re_srs = re.compile(r"^SRS0=.+=.+=(\S+)=(\S+)\@.+$")
+g_milter_max_rcpt_enabled = False
+g_milter_max_rcpt = 1
 
 class LamException(Exception):
   def __init__(self, message="General exception message"):
@@ -152,9 +152,6 @@ class LdapAclMilter(Milter.Base):
     from_addr = kwargs['from_addr']
     rcpt_addr = kwargs['rcpt_addr']
     from_source = kwargs['from_source']
-    self.log_info("check_policy: from={0} rcpt={1} from_source={2}".format(
-      from_addr, rcpt_addr, from_source
-    ))
     m = g_re_domain.match(from_addr)
     if m == None:
       self.log_info("Could not determine domain of from={0}".format(
@@ -243,19 +240,23 @@ class LdapAclMilter(Milter.Base):
         if len(g_ldap_conn.entries) == 0:
           # Policy not found in LDAP
           if g_milter_expect_auth == True:
-            self.log_info("policy mismatch from={0} rcpt={1} auth_method={2}".format(
-              from_addr, rcpt_addr, auth_method
-            ))
+            self.log_info(
+              "policy mismatch: from={0} from_src={1} rcpt={2} auth_method={3}".format(
+                from_addr, from_source, rcpt_addr, auth_method
+              )
+            )
           else:
-            self.log_info("policy mismatch from={0} rcpt={1}".format(
-              from_addr, rcpt_addr
-            ))
+            self.log_info(
+              "policy mismatch: from={0} from_src={1} rcpt={2}".format(
+                from_addr, from_source, rcpt_addr
+              )
+            )
           raise LamHardException("policy mismatch!")
         elif len(g_ldap_conn.entries) == 1:
           # Policy found in LDAP, but which one?
           entry = g_ldap_conn.entries[0]
-          self.log_info("policy match: {}".format(
-            entry.policyID.value
+          self.log_info("policy match: '{0}' from_src={1}".format(
+            entry.policyID.value, from_source
           ))
         elif len(g_ldap_conn.entries) > 1:
           # Something went wrong!? There shouldn´t be more than one entries!
@@ -276,10 +277,15 @@ class LdapAclMilter(Milter.Base):
         self.log_debug("LDAP query: {}".format(query))
         g_ldap_conn.search(g_ldap_base, query)
         if len(g_ldap_conn.entries) == 0:
-          self.log_info("policy mismatch from={0} rcpt={1}".format(
-            from_addr, rcpt_addr
-          ))
+          self.log_info(
+            "policy mismatch from={0} from_src={1} rcpt={2}".format(
+              from_addr, from_source, rcpt_addr
+            )
+          )
           raise LamHardException("policy mismatch")
+        self.log_info("policy match: '{0}' from_src={1}".format(
+          entry.policyID.value, from_source
+        ))
     except LDAPException as e:
       self.log_error("LDAP exception: {}".format(str(e)))
       raise LamSoftException("LDAP exception: " + str(e)) from e;
@@ -435,6 +441,12 @@ class LdapAclMilter(Milter.Base):
 
   def eom(self):
     self.proto_stage = 'EOM'
+    if g_milter_max_rcpt_enabled:
+      if len(self.env_rcpts) > int(g_milter_max_rcpt):
+        if g_milter_mode == 'reject':
+          return self.milter_action(action='reject', reason='Too many recipients!')
+        else:
+          self.do_log("TEST-Mode: Too many recipients!")
     if g_milter_dkim_enabled:
       self.log_info("5321.from={0} 5322.from={1} 5322.from_domain={2} 5321.rcpt={3}".format(
         self.env_from, self.hdr_from, self.hdr_from_domain, self.env_rcpts
@@ -519,13 +531,6 @@ if __name__ == "__main__":
     if 'MILTER_MODE' in os.environ:
       if re.match(r'^test|reject$',os.environ['MILTER_MODE'], re.IGNORECASE):
         g_milter_mode = os.environ['MILTER_MODE'].lower()
-    if 'MILTER_DEFAULT_POLICY' in os.environ:
-      if re.match(r'^reject|permit$',os.environ['MILTER_DEFAULT_POLICY'], re.IGNORECASE):
-        g_milter_default_policy = str(os.environ['MILTER_DEFAULT_POLICY']).lower()
-      else:
-        logging.warning("MILTER_DEFAULT_POLICY invalid value: {}"
-          .format(os.environ['MILTER_DEFAULT_POLICY'])
-        )
     if 'MILTER_NAME' in os.environ:
       g_milter_name = os.environ['MILTER_NAME']
     if 'MILTER_SCHEMA' in os.environ:
@@ -589,6 +594,14 @@ if __name__ == "__main__":
         logging.error("ENV[MILTER_TRUSTED_AUTHSERVID] is mandatory!")
         sys.exit(1)
     logging.info("ENV[MILTER_DKIM_ENABLED]: {0}".format(g_milter_dkim_enabled))
+    if 'MILTER_MAX_RCPT_ENABLED' in os.environ:
+      g_milter_max_rcpt_enabled = True
+      if 'MILTER_MAX_RCPT' in os.environ:
+        if os.environ['MILTER_MAX_RCPT'].isnumeric():
+          g_milter_max_rcpt = os.environ['MILTER_MAX_RCPT']
+        else:
+          print("ENV[MILTER_MAX_RCPT] must be numeric!")
+          sys.exit(1)
     try:
       set_config_parameter("RESTARTABLE_SLEEPTIME", 2)
       set_config_parameter("RESTARTABLE_TRIES", 2)
