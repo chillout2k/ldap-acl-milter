@@ -1,4 +1,3 @@
-from argparse import Action
 import Milter
 from ldap3 import (
   Server, Connection, NONE, set_config_parameter
@@ -29,7 +28,6 @@ g_ldap_query = '(&(mail=%rcpt%)(allowedEnvelopeSender=%from%))'
 g_re_domain = re.compile(r'^\S*@(\S+)$')
 # http://emailregex.com/ -> Python
 g_re_email = re.compile(r"(^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$)")
-g_loglevel = logging.INFO
 g_milter_mode = 'test'
 g_milter_default_policy = 'reject'
 g_milter_schema = False
@@ -57,7 +55,7 @@ class LdapAclMilter(Milter.Base):
     self.client_addr = None
 
   def reset(self):
-    self.proto_stage = 'proto-stage'
+    self.proto_stage = 'invalid'
     self.env_from = None
     self.sasl_user = None
     self.x509_subject = None
@@ -129,14 +127,18 @@ class LdapAclMilter(Milter.Base):
       raise LamSoftException()
     from_domain = m.group(1)
     logging.debug(self.mconn_id +
-      "/{0} from_domain={1}".format(self.queue_id, from_domain)
+      "/{0} from_domain={1}".format(self.proto_stage, from_domain)
     )
     m = g_re_domain.match(rcpt_addr)
     if m == None:
-      raise LamSoftException("Could not determine domain of rcpt={}".format(rcpt_addr))
+      raise LamHardException(
+        "/{0} Could not determine domain of rcpt={1}".format(
+          self.proto_stage, rcpt_addr
+        )
+      )
     rcpt_domain = m.group(1)
     logging.debug(self.mconn_id +
-      "/{0} rcpt_domain={1}".format(self.queue_id, rcpt_domain)
+      "/{0} rcpt_domain={1}".format(self.proto_stage, rcpt_domain)
     )
     try:
       if g_milter_schema == True:
@@ -219,17 +221,14 @@ class LdapAclMilter(Milter.Base):
             logging.info(self.mconn_id + " " + "policy mismatch "
               "from=" + from_addr + ", rcpt=" + rcpt_addr
             )
-          if g_milter_mode == 'reject':
-            raise LamHardException("policy not found!")
-          else:
-            logging.info(self.mconn_id + " TEST_MODE " +
-              g_milter_reject_message
-            )
+          raise LamHardException("policy mismatch!")
         elif len(g_ldap_conn.entries) == 1:
           # Policy found in LDAP, but which one?
           entry = g_ldap_conn.entries[0]
           logging.info(self.mconn_id +
-            "/{0} Policy match: {1}".format(self.proto_stage, entry.policyID.value)
+            "/{0} Policy match: {1}".format(
+              self.proto_stage, entry.policyID.value
+            )
           )
         elif len(g_ldap_conn.entries) > 1:
           # Something went wrong!? There shouldn´t be more than one entries!
@@ -254,12 +253,7 @@ class LdapAclMilter(Milter.Base):
           logging.info(self.mconn_id + " " + "policy mismatch "
             "from: " + from_addr + " and rcpt: " + rcpt_addr
           )
-          if g_milter_mode == 'reject':
-            raise LamHardException("policy mismatch")
-          else:
-            logging.info(self.mconn_id + " TEST_MODE " +
-              g_milter_reject_message
-            )
+          raise LamHardException("policy mismatch")
     except LDAPException as e:
       logging.error(self.mconn_id + " LDAP: " + str(e))
       raise LamSoftException(" LDAP: " + str(e)) from e;
@@ -341,7 +335,7 @@ class LdapAclMilter(Milter.Base):
     m = g_re_domain.match(self.env_from)
     if m == None:
       return self.milter_action(
-        action = 'tmpfail',
+        action = 'reject',
         reason = "Could not determine domain of 5321.from=" + self.env_from
       )
     return self.milter_action(action = 'continue')
@@ -365,12 +359,14 @@ class LdapAclMilter(Milter.Base):
       try:
         return self.check_policy(self.env_from, to)
       except LamSoftException as e:
-        return self.milter_action(action = 'tmpfail')
+        if g_milter_mode == 'reject':
+          return self.milter_action(action = 'tmpfail')
       except LamHardException as e:
-        return self.milter_action(
-          action = 'reject',
-          reason = e.message
-        )
+        if g_milter_mode == 'reject':
+          return self.milter_action(
+            action = 'reject',
+            reason = e.message
+          )
     return self.milter_action(action = 'continue')
 
   def header(self, hname, hval):
@@ -439,7 +435,8 @@ class LdapAclMilter(Milter.Base):
           # Check 5321.sender against policy
           self.check_policy(self.env_from, rcpt)
         except LamSoftException as e:
-          return self.milter_action(action = 'tmpfail')
+          if g_milter_mode == 'reject':
+            return self.milter_action(action = 'tmpfail')
         except LamHardException as e:
           if self.dkim_aligned:
             try:
@@ -455,10 +452,10 @@ class LdapAclMilter(Milter.Base):
           else:
             reject_message = True
 
-        if reject_message:
+        if reject_message and g_milter_mode == 'reject':
           return self.milter_action(
             action = 'reject',
-            reason = 'EOM - Policy mismatch! All recipients were rejected!'
+            reason = 'EOM - Policy mismatch! Message was rejected for all recipients!'
           )
     return self.milter_action(action = 'continue')
 
@@ -475,29 +472,31 @@ class LdapAclMilter(Milter.Base):
 
 if __name__ == "__main__":
   try:
+    log_level = logging.INFO
     if 'LOG_LEVEL' in os.environ:
       if re.match(r'^info$', os.environ['LOG_LEVEL'], re.IGNORECASE):
-        g_loglevel = logging.INFO
+        log_level = logging.INFO
       elif re.match(r'^warn|warning$', os.environ['LOG_LEVEL'], re.IGNORECASE):
-        g_loglevel = logging.WARN
+        log_level = logging.WARN
       elif re.match(r'^error$', os.environ['LOG_LEVEL'], re.IGNORECASE):
-        g_loglevel = logging.ERROR
+        log_level = logging.ERROR
       elif re.match(r'debug', os.environ['LOG_LEVEL'], re.IGNORECASE):
-        g_loglevel = logging.DEBUG
+        log_level = logging.DEBUG
+    log_format = '%(asctime)s: %(levelname)s %(message)s '
     logging.basicConfig(
-      filename=None, # log to stdout
-      format='%(asctime)s: %(levelname)s %(message)s',
-      level=g_loglevel
+      filename = None, # log to stdout
+      format = log_format,
+      level = log_level
     )
     if 'MILTER_MODE' in os.environ:
       if re.match(r'^test|reject$',os.environ['MILTER_MODE'], re.IGNORECASE):
-        g_milter_mode = os.environ['MILTER_MODE']
+        g_milter_mode = os.environ['MILTER_MODE'].lower()
     if 'MILTER_DEFAULT_POLICY' in os.environ:
       if re.match(r'^reject|permit$',os.environ['MILTER_DEFAULT_POLICY'], re.IGNORECASE):
         g_milter_default_policy = str(os.environ['MILTER_DEFAULT_POLICY']).lower()
       else:
-        logging.warning("MILTER_DEFAULT_POLICY invalid value: " +
-          os.environ['MILTER_DEFAULT_POLICY']
+        logging.warning("MILTER_DEFAULT_POLICY invalid value: {}"
+          .format(os.environ['MILTER_DEFAULT_POLICY'])
         )
     if 'MILTER_NAME' in os.environ:
       g_milter_name = os.environ['MILTER_NAME']
@@ -508,7 +507,7 @@ if __name__ == "__main__":
           if re.match(r'^true$', os.environ['MILTER_SCHEMA_WILDCARD_DOMAIN'], re.IGNORECASE):
             g_milter_schema_wildcard_domain = True
     if 'LDAP_SERVER' not in os.environ:
-      logging.error("Missing ENV[LDAP_SERVER], e.g. " + g_ldap_server)
+      logging.error("Missing ENV[LDAP_SERVER], e.g. {}".format(g_ldap_server))
       sys.exit(1)
     g_ldap_server = os.environ['LDAP_SERVER']
     if 'LDAP_BINDDN' in os.environ:
@@ -516,7 +515,7 @@ if __name__ == "__main__":
     if 'LDAP_BINDPW' in os.environ:
       g_ldap_bindpw = os.environ['LDAP_BINDPW']
     if 'LDAP_BASE' not in os.environ:
-      logging.error("Missing ENV[LDAP_BASE], e.g. " + g_ldap_base)
+      logging.error("Missing ENV[LDAP_BASE], e.g. {}".format(g_ldap_base))
       sys.exit(1)
     g_ldap_base = os.environ['LDAP_BASE']
     if 'LDAP_QUERY' not in os.environ:
@@ -542,43 +541,49 @@ if __name__ == "__main__":
       for whitelisted_rcpt in re.split(',|\s', whitelisted_rcpts_str):
         if g_re_email.match(whitelisted_rcpt) == None:
           logging.error(
-            "ENV[MILTER_WHITELISTED_RCPTS]: invalid email address: " +
-            whitelisted_rcpt
+            "ENV[MILTER_WHITELISTED_RCPTS]: invalid email address: {}"
+            .format(whitelisted_rcpt)
           )
           sys.exit(1)
         else:
-          logging.info("ENV[MILTER_WHITELISTED_RCPTS]: " + whitelisted_rcpt)
+          logging.info("ENV[MILTER_WHITELISTED_RCPTS]: {}".format(
+            whitelisted_rcpt
+          ))
           g_milter_whitelisted_rcpts[whitelisted_rcpt] = {}
     if 'MILTER_DKIM_ENABLED' in os.environ:
       g_milter_dkim_enabled = True
       if 'MILTER_TRUSTED_AUTHSERVID' in os.environ:
         g_milter_trusted_authservid = os.environ['MILTER_TRUSTED_AUTHSERVID'].lower()
-        logging.info("ENV[MILTER_TRUSTED_AUTHSERVID]: {0}".format(g_milter_trusted_authservid))
+        logging.info("ENV[MILTER_TRUSTED_AUTHSERVID]: {0}".format(
+          g_milter_trusted_authservid
+        ))
       else:
         logging.error("ENV[MILTER_TRUSTED_AUTHSERVID] is mandatory!")
         sys.exit(1)
     logging.info("ENV[MILTER_DKIM_ENABLED]: {0}".format(g_milter_dkim_enabled))
-    set_config_parameter("RESTARTABLE_SLEEPTIME", 2)
-    set_config_parameter("RESTARTABLE_TRIES", 2)
-    server = Server(g_ldap_server, get_info=NONE)
-    g_ldap_conn = Connection(server,
-      g_ldap_binddn, g_ldap_bindpw,
-      auto_bind=True, raise_exceptions=True,
-      client_strategy='RESTARTABLE'
-    )
-    logging.info("Connected to LDAP-server: " + g_ldap_server)
+    try:
+      set_config_parameter("RESTARTABLE_SLEEPTIME", 2)
+      set_config_parameter("RESTARTABLE_TRIES", 2)
+      server = Server(g_ldap_server, get_info=NONE)
+      g_ldap_conn = Connection(server,
+        g_ldap_binddn, g_ldap_bindpw,
+        auto_bind=True, raise_exceptions=True,
+        client_strategy='RESTARTABLE'
+      )
+      logging.info("Connected to LDAP-server: " + g_ldap_server)
+    except LDAPException as e:
+      raise Exception("Connection to LDAP-server failed: {}".format(str(e))) from e
     timeout = 600
     # Register to have the Milter factory create instances of your class:
     Milter.factory = LdapAclMilter
     # Tell the MTA which features we use
     flags = Milter.ADDHDRS
     Milter.set_flags(flags)
-    logging.info("Startup " + g_milter_name +
-      "@socket: " + g_milter_socket +
-      " in mode: " + g_milter_mode
-    )
+    logging.info("Starting {0}@socket: {1} in mode {2}".format(
+      g_milter_name, g_milter_socket, g_milter_mode
+    ))
     Milter.runmilter(g_milter_name,g_milter_socket,timeout,True)
-    logging.info("Shutdown " + g_milter_name)
+    logging.info("Shutdown {}".format(g_milter_name))
   except:
-    logging.error("MAIN-EXCEPTION: " + traceback.format_exc())
+    logging.error("MAIN-EXCEPTION: {}".format(traceback.format_exc()))
     sys.exit(1)

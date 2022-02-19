@@ -16,8 +16,10 @@ mt.set_timeout(60)
 if mt.mailfrom(conn, "tester-ip@test.blah") ~= nil then
   error "mt.mailfrom() failed"
 end
-if mt.getreply(conn) ~= SMFIR_CONTINUE then
-  error "mt.mailfrom() unexpected reply"
+if mt.getreply(conn) == SMFIR_CONTINUE then
+  mt.echo("FROM-continue")
+elseif mt.getreply(conn) == SMFIR_REPLYCODE then
+  error("FROM-reject")
 end
 
 -- 5321.RCPT+MACROS
@@ -25,8 +27,10 @@ mt.macro(conn, SMFIC_RCPT, "i", "4CgSNs5Q9sz7SllQ")
 if mt.rcptto(conn, "<rcpt-ip@test.blubb>") ~= nil then
   error "mt.rcptto() failed"
 end
-if mt.getreply(conn) ~= SMFIR_CONTINUE then
-  error "mt.rcptto() unexpected reply"
+if mt.getreply(conn) == SMFIR_CONTINUE then
+  mt.echo("RCPT-continue")
+elseif mt.getreply(conn) == SMFIR_REPLYCODE then
+  mt.echo("RCPT-reject")
 end
 
 -- 5322.HEADERS
