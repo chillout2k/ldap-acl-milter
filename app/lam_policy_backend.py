@@ -1,25 +1,13 @@
 import re
 from lam_logger import log_info, log_debug, log_error
-from lam_rex import rex_domain
+from lam_rex import g_rex_domain
 from ldap3 import (
   Server, Connection, NONE, set_config_parameter
 )
 from ldap3.core.exceptions import LDAPException
-
-class LamException(Exception):
-  def __init__(self, message="General exception message"):
-    self.message = message
-  def __str__(self) -> str:
-    return self.message
-
-class LamSoftException(LamException):
-  pass
-
-class LamHardException(LamException):
-  pass
-
-class LamPolicyBackendException(LamException):
-  pass
+from lam_exceptions import (
+  LamPolicyBackendException, LamHardException, LamSoftException
+)
 
 class LamPolicyBackend():
   def __init__(self, lam_config):
@@ -28,11 +16,17 @@ class LamPolicyBackend():
     try:
       set_config_parameter("RESTARTABLE_SLEEPTIME", 2)
       set_config_parameter("RESTARTABLE_TRIES", 2)
-      server = Server(self.config.ldap_server, get_info=NONE)
+      server = Server(
+        self.config.ldap_server, 
+        connect_timeout = 3,
+        get_info = NONE
+      )
       self.ldap_conn = Connection(server,
-        self.config.ldap_binddn, self.config.ldap_bindpw,
-        auto_bind=True, raise_exceptions=True,
-        client_strategy='RESTARTABLE'
+        self.config.ldap_binddn, 
+        self.config.ldap_bindpw,
+        auto_bind = True,
+        raise_exceptions = True,
+        client_strategy = 'RESTARTABLE'
       )
       log_info("Connected to LDAP-server: {}".format(self.config.ldap_server))
     except LDAPException as e:
@@ -45,7 +39,7 @@ class LamPolicyBackend():
     rcpt_addr = kwargs['rcpt_addr']
     from_source = kwargs['from_source']
     lam_session = kwargs['lam_session']
-    m = rex_domain.match(from_addr)
+    m = g_rex_domain.match(from_addr)
     if m == None:
       log_info("Could not determine domain of from={0}".format(
         from_addr
@@ -53,7 +47,7 @@ class LamPolicyBackend():
       raise LamSoftException()
     from_domain = m.group(1)
     log_debug("from_domain={}".format(from_domain))
-    m = rex_domain.match(rcpt_addr)
+    m = g_rex_domain.match(rcpt_addr)
     if m == None:
       raise LamHardException(
         "Could not determine domain of rcpt={0}".format(

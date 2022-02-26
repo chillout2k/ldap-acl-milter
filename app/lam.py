@@ -1,19 +1,14 @@
 import Milter
-import sys
 import traceback
 import string
 import random
 import re
 import email.utils
 import authres
-from lam_config import LamConfig, LamConfigException
-from lam_rex import rex_domain, rex_srs
-from lam_logger import init_logger, log_debug, log_info, log_warning, log_error
-from lam_policy import LamPolicyBackend, LamPolicyBackendException, LamSoftException, LamHardException
-
-# Globals...
-g_config = None
-g_policy_backend = None
+from lam_globals import g_config, g_policy_backend
+from lam_rex import g_rex_domain, g_rex_srs
+from lam_logger import log_debug, log_info, log_warning, log_error
+from lam_exceptions import LamSoftException, LamHardException
 
 class LdapAclMilter(Milter.Base):
   # Each new connection is handled in an own thread
@@ -38,9 +33,6 @@ class LdapAclMilter(Milter.Base):
       log_info(log_line)
     elif kwargs['level'] == 'debug':
       log_debug(log_line)
-    else:
-      print("do_log(): invalid 'level' {}".format(kwargs['level']))
-      sys.exit(1)
   def log_error(self, log_message):
     self.do_log(level='error', log_message=log_message)
   def log_warn(self, log_message):
@@ -132,7 +124,6 @@ class LdapAclMilter(Milter.Base):
         # this may fail, if no x509 client certificate was used.
         # postfix only passes this macro to milters if the TLS connection
         # with the authenticating client was trusted in a x509 manner!
-        # http://postfix.1071664.n5.nabble.com/verification-levels-and-Milter-tp91634p91638.html
         # Unfortunately, postfix only passes the CN-field of the subject/issuer DN :-/
         x509_subject = self.getsymval('{cert_subject}')
         if x509_subject != None:
@@ -169,14 +160,14 @@ class LdapAclMilter(Milter.Base):
     # Strip out Simple Private Signature (PRVS)
     mailfrom = re.sub(r"^prvs=.{10}=", '', mailfrom)
     # SRS (https://www.libsrs2.org/srs/srs.pdf)
-    m_srs = rex_srs.match(mailfrom)
+    m_srs = g_rex_srs.match(mailfrom)
     if m_srs != None:
       self.log_info("Found SRS-encoded envelope-sender: {}".format(mailfrom))
       mailfrom = m_srs.group(2) + '@' + m_srs.group(1)
       self.log_info("SRS envelope-sender replaced with: {}".format(mailfrom))
     self.env_from = mailfrom.lower()
     self.log_debug("5321.from={}".format(self.env_from))
-    m = rex_domain.match(self.env_from)
+    m = g_rex_domain.match(self.env_from)
     if m == None:
       return self.milter_action(
         action = 'reject',
@@ -224,7 +215,7 @@ class LdapAclMilter(Milter.Base):
       if(hname.lower() == "From".lower()):
         hdr_5322_from = email.utils.parseaddr(hval)
         self.hdr_from = hdr_5322_from[1].lower()
-        m = re.match(rex_domain, self.hdr_from)
+        m = re.match(g_rex_domain, self.hdr_from)
         if m is None:
           return self.milter_action(
             action = 'reject',
@@ -329,31 +320,3 @@ class LdapAclMilter(Milter.Base):
     # Clean up any external resources here.
     self.proto_stage = 'CLOSE'
     return self.milter_action(action = 'continue')
-
-if __name__ == "__main__":
-  init_logger()
-  try:
-    g_config = LamConfig()
-  except LamConfigException as e:
-    log_info("A config error was raised: {}".format(e))
-    sys.exit(1)
-  try:
-    g_policy_backend = LamPolicyBackend(g_config)
-  except LamPolicyBackendException as e:
-    log_error("An backend init error was raised: {}".format(e))
-    sys.exit(1)
-  try:  
-    timeout = 600
-    # Register to have the Milter factory create instances of your class:
-    Milter.factory = LdapAclMilter
-    # Tell the MTA which features we use
-    flags = Milter.ADDHDRS
-    Milter.set_flags(flags)
-    log_info("Starting {0}@socket: {1} in mode {2}".format(
-      g_config.milter_name, g_config.milter_socket, g_config.milter_mode
-    ))
-    Milter.runmilter(g_config.milter_name, g_config.milter_socket, timeout, True)
-    log_info("Shutdown {}".format(g_config.milter_name))
-  except:
-    log_error("MAIN-EXCEPTION: {}".format(traceback.format_exc()))
-    sys.exit(1)

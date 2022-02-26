@@ -1,13 +1,8 @@
 import re
 import os
-from lam_rex import rex_email
 from lam_logger import log_info
-
-class LamConfigException(Exception):
-  def __init__(self, message):
-    self.message = message
-  def __str__(self):
-    return self.message
+from lam_exceptions import LamConfigException
+from lam_rex import g_rex_email
 
 class LamConfig():
   def __init__(self):
@@ -73,7 +68,7 @@ class LamConfig():
       # A blank separated list is expected
       whitelisted_rcpts_str = os.environ['MILTER_WHITELISTED_RCPTS']
       for whitelisted_rcpt in re.split(',|\s', whitelisted_rcpts_str):
-        if rex_email.match(whitelisted_rcpt) == None:
+        if g_rex_email.match(whitelisted_rcpt) == None:
           raise LamConfigException(
             "ENV[MILTER_WHITELISTED_RCPTS]: invalid email address: {}"
             .format(whitelisted_rcpt)
