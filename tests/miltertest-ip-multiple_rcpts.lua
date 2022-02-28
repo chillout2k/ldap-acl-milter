@@ -16,9 +16,6 @@ mt.set_timeout(60)
 if mt.mailfrom(conn, "tester-ipx@test.blah") ~= nil then
   error "mt.mailfrom() failed"
 end
-if mt.getreply(conn) ~= SMFIR_CONTINUE then
-  error "mt.mailfrom() unexpected reply"
-end
 
 -- FIRST 5321.RCPT
 if mt.rcptto(conn, "<rcpt-ip@test.blubb>") ~= nil then

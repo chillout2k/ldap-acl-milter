@@ -17,8 +17,8 @@ class LamPolicyBackend():
       set_config_parameter("RESTARTABLE_SLEEPTIME", 2)
       set_config_parameter("RESTARTABLE_TRIES", 2)
       server = Server(
-        self.config.ldap_server, 
-        connect_timeout = 3,
+        host = self.config.ldap_server, 
+        connect_timeout = self.config.ldap_server_connect_timeout,
         get_info = NONE
       )
       self.ldap_conn = Connection(server,
@@ -34,19 +34,19 @@ class LamPolicyBackend():
         "Connection to LDAP-server failed: {}".format(str(e))
       ) from e
 
-  def check_policy(self, **kwargs) -> str:
+  def check_policy(self, **kwargs):
     from_addr = kwargs['from_addr']
     rcpt_addr = kwargs['rcpt_addr']
     from_source = kwargs['from_source']
     lam_session = kwargs['lam_session']
+    mcid = "{}/Policy".format(lam_session.mconn_id)
     m = g_rex_domain.match(from_addr)
     if m == None:
-      log_info("Could not determine domain of from={0}".format(
-        from_addr
-      ))
-      raise LamSoftException()
+      raise LamHardException(
+        "Could not determine domain of from={0}".format(from_addr)
+      )
     from_domain = m.group(1)
-    log_debug("from_domain={}".format(from_domain))
+    log_debug("{0} from_domain={1}".format(mcid, from_domain))
     m = g_rex_domain.match(rcpt_addr)
     if m == None:
       raise LamHardException(
@@ -55,7 +55,7 @@ class LamPolicyBackend():
         )
       )
     rcpt_domain = m.group(1)
-    log_debug("rcpt_domain={}".format(rcpt_domain))
+    log_debug("{0} rcpt_domain={1}".format(mcid, rcpt_domain))
     try:
       if self.config.milter_schema == True:
         # LDAP-ACL-Milter schema
@@ -77,7 +77,7 @@ class LamPolicyBackend():
             )
           else:
             auth_method = auth_method.replace('%X509_AUTH%','')
-          log_debug("auth_method: {}".format(auth_method))
+          log_debug("{0} auth_method: {1}".format(mcid, auth_method))
         if self.config.milter_schema_wildcard_domain == True:
           # The asterisk (*) character is in term of local part
           # RFC5322 compliant and expected as a wildcard literal in this code.
@@ -126,26 +126,28 @@ class LamPolicyBackend():
           )
         if len(self.ldap_conn.entries) == 0:
           # Policy not found in LDAP
-          ex = "policy mismatch: from={0} from_src={1} rcpt={2}".format(
-            from_addr, from_source, rcpt_addr
-          )
-          if self.config.milter_expect_auth == True:
-            ex = "policy mismatch: from={0} from_src={1} rcpt={2} auth_method={3}".format(
-              from_addr, from_source, rcpt_addr, auth_method
+          raise LamHardException(
+            "mismatch: from_src={0} from={1} rcpt={2}".format(
+              from_source, from_addr, rcpt_addr
             )
-          raise LamHardException(ex)
+          )
         elif len(self.ldap_conn.entries) == 1:
+          if from_source == 'from-header':
+            log_info("{0} 5322.from={1} authorized by DKIM signature".format(
+              mcid, from_addr
+            ))
           # Policy found in LDAP, but which one?
           entry = self.ldap_conn.entries[0]
-          return "policy match: '{0}' from_src={1}".format(
-            entry.policyID.value, from_source
-          )
+          log_info("{0} match: '{1}' from_src={2}".format(
+            mcid, entry.policyID.value, from_source
+          ))
         elif len(self.ldap_conn.entries) > 1:
           # Something went wrong!? There shouldn´t be more than one entries!
-          log_error("More than one policies found! from={0} rcpt={1} auth_method={2}".format(
-            from_addr, rcpt_addr, auth_method
-          ))
-          raise LamHardException("More than one policies found!")
+          raise LamHardException(
+            "More than one policies found! from={0} rcpt={1} auth_method={2}".format(
+              from_addr, rcpt_addr, auth_method
+            )
+          )
       else:
         # Custom LDAP schema
         # 'build' a LDAP query per recipient
@@ -156,18 +158,14 @@ class LamPolicyBackend():
         query = query.replace("%sasl_user%", lam_session.sasl_user)
         query = query.replace("%from_domain%", from_domain)
         query = query.replace("%rcpt_domain%", rcpt_domain)
-        log_debug("LDAP query: {}".format(query))
+        log_debug("{0} LDAP query: {1}".format(mcid, query))
         self.ldap_conn.search(self.config.ldap_base, query)
         if len(self.ldap_conn.entries) == 0:
-          log_info(
-            "policy mismatch from={0} from_src={1} rcpt={2}".format(
-              from_addr, from_source, rcpt_addr
+          raise LamHardException(
+            "mismatch from_src={0} from={1} rcpt={2}".format(
+              from_source, from_addr, rcpt_addr
             )
           )
-          raise LamHardException("policy mismatch")
-        return "policy match: '{0}' from_src={1}".format(
-          entry.policyID.value, from_source
-        )
+        log_info("{0} match from_src={1}".format(mcid, from_source))
     except LDAPException as e:
-      log_error("LDAP exception: {}".format(str(e)))
       raise LamSoftException("LDAP exception: " + str(e)) from e

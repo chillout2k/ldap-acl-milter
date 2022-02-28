@@ -17,17 +17,11 @@ mt.macro(conn, SMFIC_MAIL, "{cert_issuer}", "x509-issuer", "{cert_subject}", "x5
 if mt.mailfrom(conn, "tester-x509-invalid@test.blah") ~= nil then
   error "mt.mailfrom() failed"
 end
-if mt.getreply(conn) ~= SMFIR_CONTINUE then
-  error "mt.mailfrom() unexpected reply"
-end
 
 -- 5321.RCPT+MACROS
 mt.macro(conn, SMFIC_RCPT, "i", "4CgSNs5Q9sz7SllQ")
 if mt.rcptto(conn, "<rcpt-x509@test.blubb>") ~= nil then
   error "mt.rcptto() failed"
-end
-if mt.getreply(conn) ~= SMFIR_CONTINUE then
-  error "mt.rcptto() unexpected reply"
 end
 
 -- 5322.HEADERS

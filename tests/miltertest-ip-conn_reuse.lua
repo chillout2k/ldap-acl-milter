@@ -16,17 +16,11 @@ mt.set_timeout(60)
 if mt.mailfrom(conn, "tester-ip@test.blah") ~= nil then
   error "mt.mailfrom() failed"
 end
-if mt.getreply(conn) ~= SMFIR_CONTINUE then
-  error "mt.mailfrom() unexpected reply"
-end
 
 -- 5321.RCPT+MACROS
 mt.macro(conn, SMFIC_RCPT, "i", "4CgSNs5Q9sz7SllQ")
 if mt.rcptto(conn, "<rcpt-ip@test.blubb>") ~= nil then
   error "mt.rcptto() failed"
-end
-if mt.getreply(conn) ~= SMFIR_CONTINUE then
-  error "mt.rcptto() unexpected reply"
 end
 
 -- 5322.HEADERS
@@ -54,17 +48,11 @@ end
 if mt.mailfrom(conn, "tester-ip2@test.blah") ~= nil then
   error "mt.mailfrom() failed"
 end
-if mt.getreply(conn) ~= SMFIR_CONTINUE then
-  error "mt.mailfrom() unexpected reply"
-end
 
 -- 5321.RCPT+MACROS
 mt.macro(conn, SMFIC_RCPT, "i", "conn-reused-QID")
 if mt.rcptto(conn, "<rcpt-ip2@test.blubb>") ~= nil then
   error "mt.rcptto() failed"
-end
-if mt.getreply(conn) ~= SMFIR_CONTINUE then
-  error "mt.rcptto() unexpected reply"
 end
 
 -- 5322.HEADERS

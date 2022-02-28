@@ -5,7 +5,7 @@ import random
 import re
 import email.utils
 import authres
-from lam_globals import g_config, g_policy_backend
+from lam_backends import g_config_backend, g_policy_backend
 from lam_rex import g_rex_domain, g_rex_srs
 from lam_logger import log_debug, log_info, log_warning, log_error
 from lam_exceptions import LamSoftException, LamHardException
@@ -57,7 +57,7 @@ class LdapAclMilter(Milter.Base):
     self.passed_dkim_results = []
     self.log_debug("reset(): {}".format(self.__dict__))
     # https://stackoverflow.com/a/2257449
-    self.mconn_id = g_config.milter_name + ': ' + ''.join(
+    self.mconn_id = g_config_backend.milter_name + ': ' + ''.join(
       random.choice(string.ascii_lowercase + string.digits) for _ in range(8)
     )
 
@@ -69,12 +69,12 @@ class LdapAclMilter(Milter.Base):
     smtp_code = None
     smtp_ecode = None
     if kwargs['action'] == 'reject':
-      message = g_config.milter_reject_message
+      message = g_config_backend.milter_reject_message
       smtp_code = '550'
       smtp_ecode = '5.7.1'
       smfir = Milter.REJECT
     elif kwargs['action'] == 'tmpfail':
-      message = g_config.milter_tmpfail_message
+      message = g_config_backend.milter_tmpfail_message
       smtp_code = '450'
       smtp_ecode = '4.7.1'
       smfir = Milter.TEMPFAIL
@@ -93,8 +93,8 @@ class LdapAclMilter(Milter.Base):
     if 'reason' in kwargs:
       message = "{0} - reason: {1}".format(message, kwargs['reason'])
     if kwargs['action'] == 'reject' or kwargs['action'] == 'tmpfail':
-      self.log_info("milter_action={0} message={1}".format(
-        kwargs['action'], message
+      self.log_info("{0} - milter_action={1} message={2}".format(
+        self.mconn_id, kwargs['action'], message
       ))
       self.setreply(smtp_code, smtp_ecode, message)
     return smfir
@@ -119,7 +119,7 @@ class LdapAclMilter(Milter.Base):
   def envfrom(self, mailfrom, *str):
     self.reset()
     self.proto_stage = 'FROM'
-    if g_config.milter_expect_auth:
+    if g_config_backend.milter_expect_auth:
       try:
         # this may fail, if no x509 client certificate was used.
         # postfix only passes this macro to milters if the TLS connection
@@ -181,24 +181,28 @@ class LdapAclMilter(Milter.Base):
     to = to.replace(">","")
     to = to.lower()
     self.log_debug("5321.rcpt={}".format(to))
-    if to in g_config.milter_whitelisted_rcpts:
+    if to in g_config_backend.milter_whitelisted_rcpts:
       return self.milter_action(action = 'continue')
-    if g_config.milter_dkim_enabled:
+    if g_config_backend.milter_dkim_enabled:
       # Collect all envelope-recipients for later
       # investigation (EOM). Do not perform any 
       # policy action at this protocol phase.
       self.env_rcpts.append(to)
     else:
+      # DKIM disabled. Policy enforcement takes place here.
       try:
-        ret = g_policy_backend.check_policy(
-          from_addr=self.env_from, rcpt_addr=to, from_source='5321.from', lam_session=self
+        g_policy_backend.check_policy(
+          from_addr = self.env_from, 
+          rcpt_addr = to, 
+          from_source = 'envelope', 
+          lam_session = self
         )
-        self.log_info(ret)
+        self.env_rcpts.append(to)
       except LamSoftException as e:
-        if g_config.milter_mode == 'reject':
+        if g_config_backend.milter_mode == 'reject':
           return self.milter_action(action = 'tmpfail')
       except LamHardException as e:
-        if g_config.milter_mode == 'reject':
+        if g_config_backend.milter_mode == 'reject':
           return self.milter_action(
             action = 'reject',
             reason = e.message
@@ -210,7 +214,7 @@ class LdapAclMilter(Milter.Base):
   def header(self, hname, hval):
     self.proto_stage = 'HDR'
     self.queue_id = self.getsymval('i')
-    if g_config.milter_dkim_enabled == True:
+    if g_config_backend.milter_dkim_enabled == True:
       # Parse RFC-5322-From header
       if(hname.lower() == "From".lower()):
         hdr_5322_from = email.utils.parseaddr(hval)
@@ -232,7 +236,7 @@ class LdapAclMilter(Milter.Base):
           ar = authres.AuthenticationResultsHeader.parse(
             "{0}: {1}".format(hname, hval)
           )
-          if ar.authserv_id.lower() == g_config.milter_trusted_authservid.lower():
+          if ar.authserv_id.lower() == g_config_backend.milter_trusted_authservid.lower():
             for ar_result in ar.results:
               if ar_result.method.lower() == 'dkim':
                 if ar_result.result.lower() == 'pass':
@@ -249,13 +253,13 @@ class LdapAclMilter(Milter.Base):
 
   def eom(self):
     self.proto_stage = 'EOM'
-    if g_config.milter_max_rcpt_enabled:
-      if len(self.env_rcpts) > int(g_config.milter_max_rcpt):
-        if g_config.milter_mode == 'reject':
+    if g_config_backend.milter_max_rcpt_enabled:
+      if len(self.env_rcpts) > int(g_config_backend.milter_max_rcpt):
+        if g_config_backend.milter_mode == 'reject':
           return self.milter_action(action='reject', reason='Too many recipients!')
         else:
           self.do_log("TEST-Mode: Too many recipients!")
-    if g_config.milter_dkim_enabled:
+    if g_config_backend.milter_dkim_enabled:
       self.log_info("5321.from={0} 5322.from={1} 5322.from_domain={2} 5321.rcpt={3}".format(
         self.env_from, self.hdr_from, self.hdr_from_domain, self.env_rcpts
       ))
@@ -272,42 +276,55 @@ class LdapAclMilter(Milter.Base):
       for rcpt in self.env_rcpts:
         try:
           # Check 5321.from against policy
-          ret = g_policy_backend.check_policy(
-            from_addr=self.env_from, rcpt_addr=rcpt, from_source='5321.from', lam_session=self
+          g_policy_backend.check_policy(
+            from_addr=self.env_from, 
+            rcpt_addr=rcpt, 
+            from_source='envelope', 
+            lam_session=self
           )
-          self.log_info(ret)
+          self.log_info(
+            "action=pass 5321.from={0} 5321.rcpt={1}".format(self.env_from, rcpt)
+          )
         except LamSoftException as e:
-          self.log_info(str(e))
-          if g_config.milter_mode == 'reject':
+          self.log_info(e.message)
+          if g_config_backend.milter_mode == 'reject':
             return self.milter_action(action = 'tmpfail')
           else:
             self.log_info("TEST-Mode - tmpfail")
         except LamHardException as e:
+          self.log_info(e.message)
           if self.dkim_aligned:
             try:
               # Check 5322.from against policy
-              ret = g_policy_backend.check_policy(
-                from_addr=self.hdr_from, rcpt_addr=rcpt, from_source='5322.from', lam_session=self
+              g_policy_backend.check_policy(
+                from_addr=self.hdr_from, 
+                rcpt_addr=rcpt, 
+                from_source='from-header', 
+                lam_session=self
               )
-              self.log_info(ret)
-              self.log_info("5322.from={} authorized by DKIM signature".format(
-                self.hdr_from
-              ))
+              self.log_info(
+                "action=pass 5322.from={0} 5321.rcpt={1}".format(self.hdr_from, rcpt)
+              )
             except LamHardException as e:
               reject_message = True
           else:
             reject_message = True
+      if reject_message:
+        if g_config_backend.milter_mode == 'reject':
+          return self.milter_action(
+            action = 'reject',
+            reason = 'policy mismatch! Message rejected for all recipients!'
+          )
+        else:
+          self.log_info(
+            "TEST-Mode: policy mismatch! Message would be rejected for all recipients!"
+          )
+    else:
+      # * DKIM check disabled
+      # Iterate through all accepted envelope recipients and log
+      for rcpt in self.env_rcpts:
+        self.log_info("action=pass 5321.from={0} 5321.rcpt={1}".format(self.env_from, rcpt))
 
-        if reject_message:
-          if g_config.milter_mode == 'reject':
-            return self.milter_action(
-              action = 'reject',
-              reason = 'policy mismatch! Message rejected for all recipients!'
-            )
-          else:
-            self.log_info(
-              "TEST-Mode: policy mismatch! Message would be rejected for all recipients!"
-            )
     return self.milter_action(action = 'continue')
 
   def abort(self):

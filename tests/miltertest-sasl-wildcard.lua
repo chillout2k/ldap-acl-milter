@@ -17,17 +17,11 @@ mt.macro(conn, SMFIC_MAIL, "{auth_authen}", "blubb-user-wild")
 if mt.mailfrom(conn, "tester-invalid@test.blah") ~= nil then
   error "mt.mailfrom() failed"
 end
-if mt.getreply(conn) ~= SMFIR_CONTINUE then
-  error "mt.mailfrom() unexpected reply"
-end
 
 -- 5321.RCPT+MACROS
 mt.macro(conn, SMFIC_RCPT, "i", "test-wildcard-qid")
 if mt.rcptto(conn, "<anybody-xyz@out.there>") ~= nil then
   error "mt.rcptto() failed"
-end
-if mt.getreply(conn) ~= SMFIR_CONTINUE then
-  error "mt.rcptto() unexpected reply"
 end
 
 -- 5322.HEADERS

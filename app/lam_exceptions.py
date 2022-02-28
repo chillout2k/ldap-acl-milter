@@ -16,5 +16,5 @@ class LamHardException(LamException):
 class LamPolicyBackendException(LamException):
   pass
 
-class LamConfigException(LamException):
+class LamConfigBackendException(LamException):
   pass

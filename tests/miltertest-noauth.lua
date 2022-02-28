@@ -16,18 +16,11 @@ mt.set_timeout(60)
 if mt.mailfrom(conn, "tester-noauth@test.blah") ~= nil then
   error "mt.mailfrom() failed"
 end
-if mt.getreply(conn) ~= SMFIR_CONTINUE then
-  error "mt.mailfrom() unexpected reply"
-end
 
 -- 5321.RCPT+MACROS
 mt.macro(conn, SMFIC_RCPT, "i", "4CgSNs5Q9sz7SllQ")
 if mt.rcptto(conn, "<rcpt-noauth@test.blubb>") ~= nil then
--- if mt.rcptto(conn, "<rcpt-noauth@>") ~= nil then
   error "mt.rcptto() failed"
-end
-if mt.getreply(conn) ~= SMFIR_CONTINUE then
-  error "mt.rcptto() unexpected reply"
 end
 
 -- 5322.HEADERS
