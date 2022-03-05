@@ -1,5 +1,5 @@
 import re
-from lam_logger import log_info, log_debug, log_error
+from lam_logger import log_info, log_debug
 from lam_rex import g_rex_domain
 from ldap3 import (
   Server, Connection, NONE, set_config_parameter
@@ -8,9 +8,10 @@ from ldap3.core.exceptions import LDAPException
 from lam_exceptions import (
   LamPolicyBackendException, LamHardException, LamSoftException
 )
+from lam_config_backend import LamConfigBackend
 
 class LamPolicyBackend():
-  def __init__(self, lam_config):
+  def __init__(self, lam_config: LamConfigBackend):
     self.config = lam_config
     self.ldap_conn = None
     try:
@@ -61,18 +62,18 @@ class LamPolicyBackend():
         # LDAP-ACL-Milter schema
         auth_method = ''
         if self.config.milter_expect_auth == True:
-          auth_method = "(|(allowedClientAddr="+lam_session.client_addr+")%SASL_AUTH%%X509_AUTH%)"
+          auth_method = "(|(allowedClientAddr=" + lam_session.client_addr + ")%SASL_AUTH%%X509_AUTH%)"
           if lam_session.sasl_user:
             auth_method = auth_method.replace(
-              '%SASL_AUTH%',"(allowedSaslUser="+lam_session.sasl_user+")"
+              '%SASL_AUTH%',"(allowedSaslUser=" + lam_session.sasl_user + ")"
             )
           else:
             auth_method = auth_method.replace('%SASL_AUTH%','')
           if lam_session.x509_subject and lam_session.x509_issuer:
             auth_method = auth_method.replace('%X509_AUTH%',
               "(&"+
-                "(allowedx509subject="+lam_session.x509_subject+")"+
-                "(allowedx509issuer="+lam_session.x509_issuer+")"+
+                "(allowedx509subject=" + lam_session.x509_subject + ")" +
+                "(allowedx509issuer=" + lam_session.x509_issuer + ")" +
               ")"
             )
           else:
@@ -98,16 +99,26 @@ class LamPolicyBackend():
           self.ldap_conn.search(self.config.ldap_base,
             "(&" +
               auth_method +
-              "(|"+
-                "(allowedRcpts=" + rcpt_addr + ")"+
-                "(allowedRcpts=\\2a@" + rcpt_domain + ")"+
-                "(allowedRcpts=\\2a@\\2a)"+
-              ")"+
-              "(|"+
-                "(allowedSenders=" + from_addr + ")"+
-                "(allowedSenders=\\2a@" + from_domain + ")"+
-                "(allowedSenders=\\2a@\\2a)"+
-              ")"+
+              "(|" +
+                "(allowedSenders=" + from_addr + ")" +
+                "(allowedSenders=\\2a@" + from_domain + ")" +
+                "(allowedSenders=\\2a@\\2a)" +
+              ")" +
+              "(&" +
+                "(!(deniedSenders=" + from_addr + "))" +
+                "(!(deniedSenders=\\2a@" + from_domain + "))" +
+                "(!(deniedSenders=\\2a@\\2a))" +
+              ")" +
+              "(|" +
+                "(allowedRcpts=" + rcpt_addr + ")" +
+                "(allowedRcpts=\\2a@" + rcpt_domain + ")" +
+                "(allowedRcpts=\\2a@\\2a)" +
+              ")" +
+              "(&" +
+                "(!(deniedRcpts=" + rcpt_addr + "))" +
+                "(!(deniedRcpts=\\2a@" + rcpt_domain + "))" +
+                "(!(deniedRcpts=\\2a@\\2a))" +
+              ")" +
             ")",
             attributes=['policyID']
           )
@@ -119,8 +130,8 @@ class LamPolicyBackend():
           self.ldap_conn.search(self.config.ldap_base,
             "(&" +
               auth_method +
-              "(allowedRcpts=" + query_to + ")" +
               "(allowedSenders=" + query_from + ")" +
+              "(allowedRcpts=" + query_to + ")" +
             ")",
             attributes=['policyID']
           )
@@ -133,8 +144,8 @@ class LamPolicyBackend():
           )
         elif len(self.ldap_conn.entries) == 1:
           if from_source == 'from-header':
-            log_info("{0} 5322.from={1} authorized by DKIM signature".format(
-              mcid, from_addr
+            log_info("{0} 5322.from_domain={1} authorized by DKIM signature".format(
+              mcid, from_domain
             ))
           # Policy found in LDAP, but which one?
           entry = self.ldap_conn.entries[0]
@@ -150,12 +161,13 @@ class LamPolicyBackend():
           )
       else:
         # Custom LDAP schema
-        # 'build' a LDAP query per recipient
-        # replace all placeholders in query templates
+        # replace all placeholders in query template
         query = self.config.ldap_query.replace("%rcpt%", rcpt_addr)
         query = query.replace("%from%", from_addr)
-        query = query.replace("%client_addr%", lam_session.client_addr)
-        query = query.replace("%sasl_user%", lam_session.sasl_user)
+        if self.config.milter_expect_auth:
+          query = query.replace("%client_addr%", lam_session.client_addr)
+          if lam_session.sasl_user is not None:
+            query = query.replace("%sasl_user%", lam_session.sasl_user)
         query = query.replace("%from_domain%", from_domain)
         query = query.replace("%rcpt_domain%", rcpt_domain)
         log_debug("{0} LDAP query: {1}".format(mcid, query))

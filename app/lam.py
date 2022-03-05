@@ -45,6 +45,7 @@ class LdapAclMilter(Milter.Base):
   def reset(self):
     self.proto_stage = 'invalid'
     self.env_from = None
+    self.null_sender = False
     self.sasl_user = None
     self.x509_subject = None
     self.x509_issuer = None
@@ -154,34 +155,42 @@ class LdapAclMilter(Milter.Base):
           self.client_addr, self.x509_subject, self.x509_issuer, self.sasl_user
         )
       )
-    mailfrom = mailfrom.replace("<","")
-    mailfrom = mailfrom.replace(">","")
-    # BATV (https://tools.ietf.org/html/draft-levine-smtp-batv-01)
-    # Strip out Simple Private Signature (PRVS)
-    mailfrom = re.sub(r"^prvs=.{10}=", '', mailfrom)
-    # SRS (https://www.libsrs2.org/srs/srs.pdf)
-    m_srs = g_rex_srs.match(mailfrom)
-    if m_srs != None:
-      self.log_info("Found SRS-encoded envelope-sender: {}".format(mailfrom))
-      mailfrom = m_srs.group(2) + '@' + m_srs.group(1)
-      self.log_info("SRS envelope-sender replaced with: {}".format(mailfrom))
-    self.env_from = mailfrom.lower()
-    self.log_debug("5321.from={}".format(self.env_from))
-    m = g_rex_domain.match(self.env_from)
-    if m == None:
-      return self.milter_action(
-        action = 'reject',
-        reason = "Could not determine domain of 5321.from={}".format(self.env_from)
-      )
+    if mailfrom == '<>':
+      self.null_sender = True
+    if g_config_backend.milter_allow_null_sender and self.null_sender:
+      self.log_info("Null-sender accepted - skipping policy checks")
+    else:
+      mailfrom = mailfrom.replace("<","")
+      mailfrom = mailfrom.replace(">","")
+      # BATV (https://tools.ietf.org/html/draft-levine-smtp-batv-01)
+      # Strip out Simple Private Signature (PRVS)
+      mailfrom = re.sub(r"^prvs=.{10}=", '', mailfrom)
+      # SRS (https://www.libsrs2.org/srs/srs.pdf)
+      m_srs = g_rex_srs.match(mailfrom)
+      if m_srs != None:
+        self.log_info("Found SRS-encoded envelope-sender: {}".format(mailfrom))
+        mailfrom = m_srs.group(2) + '@' + m_srs.group(1)
+        self.log_info("SRS envelope-sender replaced with: {}".format(mailfrom))
+      self.env_from = mailfrom.lower()
+      self.log_debug("5321.from={}".format(self.env_from))
+      m = g_rex_domain.match(self.env_from)
+      if m == None:
+        return self.milter_action(
+          action = 'reject',
+          reason = "Could not determine domain of 5321.from={}".format(self.env_from)
+        )
     return self.milter_action(action = 'continue')
 
   def envrcpt(self, to, *str):
     self.proto_stage = 'RCPT'
+    if g_config_backend.milter_allow_null_sender and self.null_sender:
+      return self.milter_action(action = 'continue')
     to = to.replace("<","")
     to = to.replace(">","")
     to = to.lower()
     self.log_debug("5321.rcpt={}".format(to))
     if to in g_config_backend.milter_whitelisted_rcpts:
+      self.log_info("Welcome-listed rcpt={} - skipping policy checks".format(to))
       return self.milter_action(action = 'continue')
     if g_config_backend.milter_dkim_enabled:
       # Collect all envelope-recipients for later
@@ -214,6 +223,8 @@ class LdapAclMilter(Milter.Base):
   def header(self, hname, hval):
     self.proto_stage = 'HDR'
     self.queue_id = self.getsymval('i')
+    if g_config_backend.milter_allow_null_sender and self.null_sender:
+      return self.milter_action(action = 'continue')
     if g_config_backend.milter_dkim_enabled == True:
       # Parse RFC-5322-From header
       if(hname.lower() == "From".lower()):
@@ -223,7 +234,7 @@ class LdapAclMilter(Milter.Base):
         if m is None:
           return self.milter_action(
             action = 'reject',
-            reason = "Could not determine domain-part of 5322.from=" + self.hdr_from
+            reason = "Could not determine domain-part of 5322.from={}".format(self.hdr_from)
           )
         self.hdr_from_domain = m.group(1)
         self.log_debug("5322.from={0}, 5322.from_domain={1}".format(
@@ -259,6 +270,8 @@ class LdapAclMilter(Milter.Base):
           return self.milter_action(action='reject', reason='Too many recipients!')
         else:
           self.do_log("TEST-Mode: Too many recipients!")
+    if g_config_backend.milter_allow_null_sender and self.null_sender:
+      return self.milter_action(action = 'continue')
     if g_config_backend.milter_dkim_enabled:
       self.log_info("5321.from={0} 5322.from={1} 5322.from_domain={2} 5321.rcpt={3}".format(
         self.env_from, self.hdr_from, self.hdr_from_domain, self.env_rcpts
@@ -274,6 +287,8 @@ class LdapAclMilter(Milter.Base):
             ))
       reject_message = False
       for rcpt in self.env_rcpts:
+        if rcpt in g_config_backend.milter_whitelisted_rcpts:
+          self.log_info("Welcome-listed rcpt={}".format(rcpt))
         try:
           # Check 5321.from against policy
           g_policy_backend.check_policy(

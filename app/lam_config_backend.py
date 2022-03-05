@@ -26,6 +26,7 @@ class LamConfigBackend():
     self.milter_trusted_authservid = None
     self.milter_max_rcpt_enabled = False
     self.milter_max_rcpt = 1
+    self.milter_allow_null_sender = False
 
     if 'MILTER_NAME' in os.environ:
       self.milter_name = os.environ['MILTER_NAME']
@@ -150,4 +151,7 @@ class LamConfigBackend():
           raise LamConfigBackendException("ENV[MILTER_MAX_RCPT] must be numeric!")
     log_info("ENV[MILTER_MAX_RCPT_ENABLED]: {}".format(self.milter_max_rcpt_enabled))
 
-
+    if 'MILTER_ALLOW_NULL_SENDER' in os.environ:
+      if re.match(r'^true$', os.environ['MILTER_ALLOW_NULL_SENDER'], re.IGNORECASE):
+        self.milter_allow_null_sender = True
+    log_info("ENV[MILTER_ALLOW_NULL_SENDER]: {}".format(self.milter_allow_null_sender))
