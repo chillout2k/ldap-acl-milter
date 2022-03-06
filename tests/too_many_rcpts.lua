@@ -6,31 +6,39 @@ conn = mt.connect(socket)
 if conn == nil then
   error "mt.connect() failed"
 end
-if mt.conninfo(conn, "localhost", "2001:db8:dead:beef::1234") ~= nil then
+if mt.conninfo(conn, "blubb-ip.host", "127.128.129.130") ~= nil then
   error "mt.conninfo() failed"
 end
 
 mt.set_timeout(60)
 
--- 5321.FROM+MACROS
-mt.macro(conn, SMFIC_MAIL, "{auth_authen}", "blubb-user-wild")
-if mt.mailfrom(conn, "tester-invalid@test.blah") ~= nil then
+-- 5321.FROM
+if mt.mailfrom(conn, "tester-sender@test.blah") ~= nil then
   error "mt.mailfrom() failed"
 end
 
--- 5321.RCPT+MACROS
-mt.macro(conn, SMFIC_RCPT, "i", "test-wildcard-qid")
-if mt.rcptto(conn, "<anybody-xyz@out.there>") ~= nil then
+-- FIRST 5321.RCPT
+if mt.rcptto(conn, "<rcpt1@test.blubb>") ~= nil then
   error "mt.rcptto() failed"
 end
+if mt.getreply(conn) == SMFIR_CONTINUE then
+  mt.echo("RCPT1-continue")
+elseif mt.getreply(conn) == SMFIR_REPLYCODE then
+  mt.echo("RCPT1-reject")
+end
 
--- 5322.HEADERS
-if mt.header(conn, "fRoM", '"Blah Blubb" <tester@test.blah>') ~= nil then
-  error "mt.header(From) failed"  
+-- SECOND 5321.RCPT
+if mt.rcptto(conn, "<rcpt2@test.blubb>") ~= nil then
+  error "mt.rcptto() failed"
 end
-if mt.header(conn, "Authentication-RESULTS", "my-auth-serv-id;\n  dkim=pass header.d=test.blah header.s=selector1-test-blah header.b=mumble") ~= nil then
-  error "mt.header(Authentication-Results) failed"  
+if mt.getreply(conn) == SMFIR_CONTINUE then
+  mt.echo("RCPT2-continue")
+elseif mt.getreply(conn) == SMFIR_REPLYCODE then
+  mt.echo("RCPT2-reject")
 end
+
+-- SET RCPT-MACRO
+mt.macro(conn, SMFIC_RCPT, "i", "some-queue-id")
 
 -- EOM
 if mt.eom(conn) ~= nil then

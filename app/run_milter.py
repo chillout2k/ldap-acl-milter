@@ -12,7 +12,6 @@ from lam import LdapAclMilter
 
 if __name__ == "__main__":  
   try:
-    timeout = lam_backends.g_config_backend.milter_timeout
     # Register to have the Milter factory create instances of your class:
     Milter.factory = LdapAclMilter
     # Tell the MTA which features we use
@@ -24,7 +23,7 @@ if __name__ == "__main__":
     Milter.runmilter(
       lam_backends.g_config_backend.milter_name, 
       lam_backends.g_config_backend.milter_socket, 
-      timeout,
+      lam_backends.g_config_backend.milter_timeout,
       True
     )
     log_info("Shutdown {}".format(lam_backends.g_config_backend.milter_name))

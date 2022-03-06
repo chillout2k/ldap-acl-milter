@@ -36,12 +36,11 @@ class LamPolicyBackend():
         "Connection to LDAP-server failed: {}".format(str(e))
       ) from e
 
-  def check_policy(self, **kwargs):
+  def check_policy(self, session: LamSession, **kwargs):
     from_addr = kwargs['from_addr']
     rcpt_addr = kwargs['rcpt_addr']
     from_source = kwargs['from_source']
-    lam_session = kwargs['lam_session']
-    mcid = "{}/Policy".format(lam_session.mconn_id)
+    mcid = "{}/Policy".format(session.get_mconn_id())
     m = g_rex_domain.match(from_addr)
     if m == None:
       raise LamHardException(
@@ -63,18 +62,22 @@ class LamPolicyBackend():
         # LDAP-ACL-Milter schema enabled
         auth_method = ''
         if self.config.milter_expect_auth == True:
-          auth_method = "(|(allowedClientAddr=" + lam_session.client_addr + ")%SASL_AUTH%%X509_AUTH%)"
-          if lam_session.sasl_user:
+          auth_method = "(|(allowedClientAddr={})%SASL_AUTH%%X509_AUTH%)".format(
+            session.get_client_addr()
+          )
+          if session.get_sasl_user():
             auth_method = auth_method.replace(
-              '%SASL_AUTH%',"(allowedSaslUser=" + lam_session.sasl_user + ")"
+              '%SASL_AUTH%',"(allowedSaslUser={})".format(
+                session.get_sasl_user()
+              )
             )
           else:
             auth_method = auth_method.replace('%SASL_AUTH%','')
-          if lam_session.x509_subject and lam_session.x509_issuer:
+          if session.get_x509_subject() and session.get_x509_issuer():
             auth_method = auth_method.replace('%X509_AUTH%',
               "(&"+
-                "(allowedx509subject=" + lam_session.x509_subject + ")" +
-                "(allowedx509issuer=" + lam_session.x509_issuer + ")" +
+                "(allowedx509subject=" + session.get_x509_subject() + ")" +
+                "(allowedx509issuer=" + session.get_x509_issuer() + ")" +
               ")"
             )
           else:
@@ -168,9 +171,9 @@ class LamPolicyBackend():
         query = self.config.ldap_query.replace("%rcpt%", rcpt_addr)
         query = query.replace("%from%", from_addr)
         if self.config.milter_expect_auth:
-          query = query.replace("%client_addr%", lam_session.client_addr)
-          if lam_session.sasl_user is not None:
-            query = query.replace("%sasl_user%", lam_session.sasl_user)
+          query = query.replace("%client_addr%", session.get_client_addr())
+          if session.get_sasl_user() is not None:
+            query = query.replace("%sasl_user%", session.get_sasl_user())
         query = query.replace("%from_domain%", from_domain)
         query = query.replace("%rcpt_domain%", rcpt_domain)
         log_debug("{0} LDAP query: {1}".format(mcid, query))
