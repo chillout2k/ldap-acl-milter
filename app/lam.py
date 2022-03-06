@@ -9,6 +9,7 @@ from lam_backends import g_config_backend, g_policy_backend
 from lam_rex import g_rex_domain, g_rex_srs
 from lam_logger import log_debug, log_info, log_warning, log_error
 from lam_exceptions import LamSoftException, LamHardException
+from lam_session import LamSession
 
 class LdapAclMilter(Milter.Base):
   # Each new connection is handled in an own thread
@@ -99,14 +100,6 @@ class LdapAclMilter(Milter.Base):
       ))
       self.setreply(smtp_code, smtp_ecode, message)
     return smfir
-
-  # Not registered/used callbacks
-  @Milter.nocallback
-  def eoh(self):
-    return self.milter_action(action = 'continue')
-  @Milter.nocallback
-  def body(self, chunk):
-    return self.milter_action(action = 'continue')
 
   def connect(self, IPname, family, hostaddr):
     self.reset()
@@ -260,6 +253,14 @@ class LdapAclMilter(Milter.Base):
             )
         except Exception as e:
           self.log_info("AR-parse exception: {0}".format(str(e)))
+    return self.milter_action(action = 'continue')
+
+  # Not registered/used callbacks
+  @Milter.nocallback
+  def eoh(self):
+    return self.milter_action(action = 'continue')
+  @Milter.nocallback
+  def body(self, chunk):
     return self.milter_action(action = 'continue')
 
   def eom(self):

@@ -9,6 +9,7 @@ from lam_exceptions import (
   LamPolicyBackendException, LamHardException, LamSoftException
 )
 from lam_config_backend import LamConfigBackend
+from lam_session import LamSession
 
 class LamPolicyBackend():
   def __init__(self, lam_config: LamConfigBackend):
@@ -59,7 +60,7 @@ class LamPolicyBackend():
     log_debug("{0} rcpt_domain={1}".format(mcid, rcpt_domain))
     try:
       if self.config.milter_schema == True:
-        # LDAP-ACL-Milter schema
+        # LDAP-ACL-Milter schema enabled
         auth_method = ''
         if self.config.milter_expect_auth == True:
           auth_method = "(|(allowedClientAddr=" + lam_session.client_addr + ")%SASL_AUTH%%X509_AUTH%)"
@@ -124,14 +125,16 @@ class LamPolicyBackend():
           )
         else:
           # Wildcard-domain DISABLED
-          # Asterisk must be ASCII-HEX encoded for LDAP queries
+          # Asterisk (*) must be ASCII-HEX encoded for LDAP queries
           query_from = from_addr.replace("*","\\2a")
           query_to = rcpt_addr.replace("*","\\2a")
           self.ldap_conn.search(self.config.ldap_base,
             "(&" +
               auth_method +
               "(allowedSenders=" + query_from + ")" +
+              "(!(deniedSenders=" + query_from + "))" +
               "(allowedRcpts=" + query_to + ")" +
+              "(!(deniedRcpts=" + query_to + "))" +
             ")",
             attributes=['policyID']
           )
@@ -149,7 +152,7 @@ class LamPolicyBackend():
             ))
           # Policy found in LDAP, but which one?
           entry = self.ldap_conn.entries[0]
-          log_info("{0} match: '{1}' from_src={2}".format(
+          log_info("{0} match='{1}' from_src={2}".format(
             mcid, entry.policyID.value, from_source
           ))
         elif len(self.ldap_conn.entries) > 1:
