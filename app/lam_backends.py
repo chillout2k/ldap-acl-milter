@@ -2,11 +2,11 @@ import traceback
 from lam_exceptions import (
   LamInitException, LamPolicyBackendException, LamConfigBackendException
 )
-from lam_logger import init_logger
+from lam_log_backend import init_log_backend
 from lam_config_backend import LamConfigBackend 
 from lam_policy_backend import LamPolicyBackend
 
-init_logger()
+init_log_backend()
 
 g_config_backend = None
 try:

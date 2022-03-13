@@ -5,7 +5,7 @@ import email.utils
 import authres
 from lam_backends import g_config_backend, g_policy_backend
 from lam_rex import g_rex_domain, g_rex_srs
-from lam_logger import log_debug, log_info, log_warning, log_error
+from lam_log_backend import log_debug, log_info, log_error
 from lam_exceptions import LamSoftException, LamHardException
 from lam_session import LamSession
 
@@ -13,32 +13,6 @@ class LdapAclMilter(Milter.Base):
   # Each new connection is handled in an own thread
   def __init__(self):
     self.session = None
-
-  def do_log(self, **kwargs):
-    log_line = ''
-    if hasattr(self.session, 'mconn_id'):
-      log_line = "{}".format(self.session.get_mconn_id())
-    if self.session.get_queue_id() != 'invalid':
-      log_line = "{0}/{1}".format(log_line, self.session.get_queue_id())
-    if self.session.get_proto_stage() != 'invalid':
-      log_line = "{0}/{1}".format(log_line, self.session.get_proto_stage())
-    log_line = "{0} {1}".format(log_line, kwargs['log_message'])
-    if kwargs['level'] == 'error':
-      log_error(log_line)
-    elif kwargs['level'] == 'warn' or kwargs['level'] == 'warning':
-      log_warning(log_line)
-    elif kwargs['level'] == 'info':
-      log_info(log_line)
-    elif kwargs['level'] == 'debug':
-      log_debug(log_line)
-  def log_error(self, log_message):
-    self.do_log(level='error', log_message=log_message)
-  def log_warn(self, log_message):
-    self.do_log(level='warn', log_message=log_message)
-  def log_info(self, log_message):
-    self.do_log(level='info', log_message=log_message)
-  def log_debug(self, log_message):
-    self.do_log(level='debug', log_message=log_message)
 
   def milter_action(self, **kwargs) -> int:
     if 'action' not in kwargs:
@@ -72,14 +46,15 @@ class LdapAclMilter(Milter.Base):
     if 'reason' in kwargs:
       message = "{0} - reason: {1}".format(message, kwargs['reason'])
     if kwargs['action'] == 'reject' or kwargs['action'] == 'tmpfail':
-      self.log_info("{0} - milter_action={1} message={2}".format(
-        self.session.get_mconn_id(), kwargs['action'], message
-      ))
+      log_info(
+        "milter_action={0} message={1}".format(kwargs['action'], message),
+        self.session
+      )
       self.setreply(smtp_code, smtp_ecode, message)
     return smfir
 
   def connect(self, IPname, family, hostaddr):
-    self.session = LamSession(hostaddr[0], g_config_backend)
+    self.session = LamSession(hostaddr[0])
     self.session.set_proto_stage('CONNECT')
     return self.milter_action(action = 'continue')
 
@@ -95,37 +70,53 @@ class LdapAclMilter(Milter.Base):
         x509_subject = self.getsymval('{cert_subject}')
         if x509_subject != None:
           self.session.set_x509_subject(x509_subject)
-          self.log_debug("x509_subject={}".format(self.session.get_x509_subject()))
+          log_debug(
+            "x509_subject={}".format(self.session.get_x509_subject()),
+            self.session
+          )
         else:
-          self.log_debug("No x509_subject registered")
+          log_debug("No x509_subject registered", self.session)
         x509_issuer = self.getsymval('{cert_issuer}')
         if x509_issuer != None:
           self.session.set_x509_issuer(x509_issuer)
-          self.log_debug("x509_issuer={}".format(self.session.get_x509_issuer()))
+          log_debug(
+            "x509_issuer={}".format(self.session.get_x509_issuer()),
+            self.session
+          )
         else:
-          self.log_debug("No x509_issuer registered")
+          log_debug("No x509_issuer registered", self.session)
       except:
-        self.log_error("x509 exception: {}".format(traceback.format_exc()))
+        log_error(
+          "x509 exception: {}".format(traceback.format_exc()),
+          self.session
+        )
       try:
         # this may fail, if no SASL authentication preceded
         sasl_user = self.getsymval('{auth_authen}')
         if sasl_user != None:
           self.session.set_sasl_user(sasl_user)
-          self.log_debug("sasl_user={}".format(self.session.get_sasl_user()))
+          log_debug(
+            "sasl_user={}".format(self.session.get_sasl_user()),
+            self.session
+          )
         else:
-          self.log_debug("No sasl_user registered")
+          log_debug("No sasl_user registered", self.session)
       except:
-        self.log_error("sasl_user exception: {}".format(traceback.format_exc()))
-      self.log_info(
+        log_error(
+          "sasl_user exception: {}".format(traceback.format_exc()),
+          self.session
+        )
+      log_info(
         "auth: client_ip={0} sasl_user={1} x509_subject={2} x509_issuer={3}".format(
           self.session.get_client_addr(), self.session.get_sasl_user(),
           self.session.get_x509_subject(), self.session.get_x509_issuer()
-        )
+        ),
+        self.session
       )
     if mailfrom == '<>':
       self.session.set_null_sender(True)
     if g_config_backend.milter_allow_null_sender and self.session.is_null_sender():
-      self.log_info("Null-sender accepted - skipping policy checks")
+      log_info("Null-sender accepted - skipping policy checks", self.session)
     else:
       mailfrom = mailfrom.replace("<","")
       mailfrom = mailfrom.replace(">","")
@@ -135,11 +126,17 @@ class LdapAclMilter(Milter.Base):
       # SRS (https://www.libsrs2.org/srs/srs.pdf)
       m_srs = g_rex_srs.match(mailfrom)
       if m_srs != None:
-        self.log_info("Found SRS-encoded envelope-sender: {}".format(mailfrom))
+        log_info(
+          "Found SRS-encoded envelope-sender: {}".format(mailfrom),
+          self.session
+        )
         mailfrom = m_srs.group(2) + '@' + m_srs.group(1)
-        self.log_info("SRS envelope-sender replaced with: {}".format(mailfrom))
+        log_info(
+          "SRS envelope-sender replaced with: {}".format(mailfrom),
+          self.session
+        )
       self.session.set_env_from(mailfrom.lower())
-      self.log_debug("5321.from={}".format(self.session.get_env_from()))
+      log_debug("5321.from={}".format(self.session.get_env_from()), self.session)
       m = g_rex_domain.match(self.session.get_env_from())
       if m == None:
         return self.milter_action(
@@ -157,9 +154,12 @@ class LdapAclMilter(Milter.Base):
     to = to.replace("<","")
     to = to.replace(">","")
     to = to.lower()
-    self.log_debug("5321.rcpt={}".format(to))
+    log_debug("5321.rcpt={}".format(to), self.session)
     if to in g_config_backend.milter_whitelisted_rcpts:
-      self.log_info("Welcome-listed rcpt={} - skipping policy checks".format(to))
+      log_info(
+        "Welcome-listed rcpt={} - skipping policy checks".format(to),
+        self.session
+      )
       return self.milter_action(action = 'continue')
     if g_config_backend.milter_dkim_enabled:
       # Collect all envelope-recipients for later
@@ -186,7 +186,7 @@ class LdapAclMilter(Milter.Base):
             reason = e.message
           )
         else:
-          self.log_info("TEST-Mode: {}".format(e.message))
+          log_info("TEST-Mode: {}".format(e.message), self.session)
     return self.milter_action(action = 'continue')
 
   def header(self, hname, hval):
@@ -208,9 +208,12 @@ class LdapAclMilter(Milter.Base):
             )
           )
         self.session.set_hdr_from_domain(m.group(1))
-        self.log_debug("5322.from={0}, 5322.from_domain={1}".format(
-          self.session.get_hdr_from(), self.session.get_hdr_from_domain()
-        ))
+        log_debug(
+          "5322.from={0}, 5322.from_domain={1}".format(
+            self.session.get_hdr_from(), self.session.get_hdr_from_domain()
+          ),
+          self.session
+        )
       # Parse RFC-7601 Authentication-Results header
       elif(hname.lower() == "Authentication-Results".lower()):
         ar = None
@@ -223,16 +226,18 @@ class LdapAclMilter(Milter.Base):
               if ar_result.method.lower() == 'dkim':
                 if ar_result.result.lower() == 'pass':
                   self.session.add_passed_dkim_result(ar_result.header_d.lower())
-                  self.log_debug("dkim=pass sdid={}".format(ar_result.header_d))
+                  log_debug(
+                    "dkim=pass sdid={}".format(ar_result.header_d),
+                    self.session
+                  )
                   self.session.set_dkim_valid(True)
           else:
-            self.log_debug(
-              "Ignoring authentication results of {}".format(
-                ar.authserv_id
-              )
+            log_debug(
+              "Ignoring authentication results of {}".format(ar.authserv_id),
+              self.session
             )
         except Exception as e:
-          self.log_info("AR-parse exception: {0}".format(str(e)))
+          log_info("AR-parse exception: {0}".format(str(e)), self.session)
     return self.milter_action(action = 'continue')
 
   # Not registered/used callbacks
@@ -250,15 +255,16 @@ class LdapAclMilter(Milter.Base):
         if g_config_backend.milter_mode == 'reject':
           return self.milter_action(action='reject', reason='Too many recipients!')
         else:
-          self.log_error("TEST-Mode: Too many recipients!")
+          log_error("TEST-Mode: Too many recipients!", self.session)
     if g_config_backend.milter_allow_null_sender and self.session.is_null_sender():
       return self.milter_action(action = 'continue')
     if g_config_backend.milter_dkim_enabled:
-      self.log_info(
+      log_info(
         "5321.from={0} 5322.from={1} 5322.from_domain={2} 5321.rcpt={3}".format(
           self.session.get_env_from(), self.session.get_hdr_from(), 
           self.session.get_hdr_from_domain(), self.session.get_env_rcpts()
-        )
+        ),
+        self.session
       )
       if self.session.is_dkim_valid():
         # There is at least one valid DKIM signature!
@@ -266,13 +272,16 @@ class LdapAclMilter(Milter.Base):
         for passed_dkim_sdid in self.session.get_passed_dkim_results():
           if self.session.get_hdr_from_domain().lower() == passed_dkim_sdid.lower():
             self.session.set_dkim_aligned(True)
-            self.log_info("Found aligned DKIM signature for SDID: {0}".format(
-              passed_dkim_sdid
-            ))
+            log_info(
+              "Found aligned DKIM signature for SDID: {0}".format(
+                passed_dkim_sdid
+              ),
+              self.session
+            )
       reject_message = False
       for rcpt in self.session.get_env_rcpts():
         if rcpt in g_config_backend.milter_whitelisted_rcpts:
-          self.log_info("Welcome-listed rcpt={}".format(rcpt))
+          log_info("Welcome-listed rcpt={}".format(rcpt), self.session)
         try:
           # Check 5321.from <-> 5321.rcpt against policy
           g_policy_backend.check_policy(
@@ -281,19 +290,20 @@ class LdapAclMilter(Milter.Base):
             rcpt_addr=rcpt, 
             from_source='envelope'
           )
-          self.log_info(
+          log_info(
             "action=pass 5321.from={0} 5321.rcpt={1}".format(
               self.session.get_env_from(), rcpt
-            )
+            ),
+            self.session
           )
         except LamSoftException as e:
-          self.log_info(str(e))
+          log_info(str(e), self.session)
           if g_config_backend.milter_mode == 'reject':
             return self.milter_action(action = 'tmpfail')
           else:
-            self.log_info("TEST-Mode - tmpfail: {}".format(str(e)))
+            log_info("TEST-Mode - tmpfail: {}".format(str(e)), self.session)
         except LamHardException as e:
-          self.log_info(e.message)
+          log_info(e.message, self.session)
           if self.session.is_dkim_aligned():
             try:
               # Check 5322.from <-> 5321.rcpt against policy
@@ -303,17 +313,18 @@ class LdapAclMilter(Milter.Base):
                 rcpt_addr=rcpt, 
                 from_source='from-header'
               )
-              self.log_info(
+              log_info(
                 "action=pass 5322.from={0} 5321.rcpt={1}".format(
                   self.session.get_hdr_from(), rcpt
-                )
+                ),
+                self.session
               )
             except LamSoftException as e:
-              self.log_info(str(e))
+              log_info(str(e), self.session)
               if g_config_backend.milter_mode == 'reject':
                 return self.milter_action(action = 'tmpfail')
               else:
-                self.log_info("TEST-Mode - tmpfail: {}".format(str(e)))
+                log_info("TEST-Mode - tmpfail: {}".format(str(e)), self.session)
             except LamHardException as e:
               reject_message = True
           else:
@@ -325,15 +336,19 @@ class LdapAclMilter(Milter.Base):
             reason = 'policy mismatch! Message rejected for all recipients!'
           )
         else:
-          self.log_info(
-            "TEST-Mode: policy mismatch! Message would be rejected for all recipients!"
+          log_info(
+            "TEST-Mode: policy mismatch! Message would be rejected for all recipients!",
+            self.session
           )
     else:
       # * DKIM check disabled
       # Iterate through all accepted envelope recipients and log success
       for rcpt in self.session.get_env_rcpts():
-        self.log_info("action=pass 5321.from={0} 5321.rcpt={1}".format(
-          self.session.get_env_from(), rcpt)
+        log_info(
+          "action=pass 5321.from={0} 5321.rcpt={1}".format(
+            self.session.get_env_from(), rcpt
+          ),
+          self.session
         )
     # No policy violations so far :-)
     return self.milter_action(action = 'continue')

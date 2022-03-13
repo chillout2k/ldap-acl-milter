@@ -1,12 +1,9 @@
 import string
 import random
-from lam_logger import log_debug
-from lam_policy_backend import LamConfigBackend
 
 class LamSession():
-  def __init__(self, client_addr: str, config: LamConfigBackend):
+  def __init__(self, client_addr: str):
     self.client_addr = client_addr
-    self.config = config
     self.reset()
 
   def reset(self):
@@ -23,9 +20,8 @@ class LamSession():
     self.dkim_valid = False
     self.dkim_aligned = False
     self.passed_dkim_results = []
-    log_debug("reset(): {}".format(self.__dict__))
     # https://stackoverflow.com/a/2257449
-    self.mconn_id = self.config.milter_name + ': ' + ''.join(
+    self.mconn_id = ''.join(
       random.choice(string.ascii_lowercase + string.digits) for _ in range(8)
     )
 

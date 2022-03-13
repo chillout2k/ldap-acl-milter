@@ -2,7 +2,7 @@ import Milter
 import sys
 import traceback
 from lam_exceptions import LamInitException
-from lam_logger import log_info, log_error
+from lam_log_backend import log_info, log_error
 try:
   import lam_backends
 except LamInitException as e:

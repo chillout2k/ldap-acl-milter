@@ -1,8 +1,8 @@
 import re
 import os
-from lam_logger import log_info
 from lam_exceptions import LamConfigBackendException
 from lam_rex import g_rex_email
+from lam_log_backend import log_info
 
 class LamConfigBackend():
   def __init__(self):
