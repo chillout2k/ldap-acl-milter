@@ -29,9 +29,6 @@ end
 if mt.header(conn, "fRoM", '"Blah Blubb" <tester@test.blah>') ~= nil then
   error "mt.header(From) failed"  
 end
-if mt.header(conn, "Authentication-RESULTS", "my-auth-serv-id;\n  dkim=pass header.d=test.blah header.s=selector1-test-blah header.b=mumble") ~= nil then
-  error "mt.header(Authentication-Results) failed"  
-end
 
 -- EOM
 if mt.eom(conn) ~= nil then

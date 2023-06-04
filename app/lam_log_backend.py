@@ -33,7 +33,7 @@ def do_log(level: str, log_message: str, session: Optional[LamSession] = None):
       log_line = "{0}/{1}".format(log_line, session.get_queue_id())
   if session is not None and session.get_proto_stage() != 'invalid':
     log_line = "{0}/{1}".format(log_line, session.get_proto_stage())
-  log_line = "{0}{1}".format(log_line, log_message)
+  log_line = "{0} {1}".format(log_line, log_message)
   if level == 'error':
     logging.error(log_line)
   elif level == 'warn' or level == 'warning':

@@ -16,6 +16,11 @@ mt.set_timeout(60)
 if mt.mailfrom(conn, "<>") ~= nil then
   error "mt.mailfrom() failed"
 end
+if mt.getreply(conn) == SMFIR_CONTINUE then
+  mt.echo("FROM-continue - null_sender allowed")
+elseif mt.getreply(conn) == SMFIR_REPLYCODE then
+  error "FROM-reject - disconnect"
+end
 
 -- 5321.RCPT+MACROS
 mt.macro(conn, SMFIC_RCPT, "i", "4CgSNs5Q9sz7SllQ")

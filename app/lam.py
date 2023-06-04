@@ -5,7 +5,7 @@ import email.utils
 import authres
 from lam_backends import g_config_backend, g_policy_backend
 from lam_rex import g_rex_domain, g_rex_srs
-from lam_log_backend import log_debug, log_info, log_error
+from lam_log_backend import log_debug, log_info, log_warning, log_error
 from lam_exceptions import LamSoftException, LamHardException
 from lam_session import LamSession
 
@@ -164,7 +164,7 @@ class LdapAclMilter(Milter.Base):
     if g_config_backend.milter_dkim_enabled:
       # Collect all envelope-recipients for later
       # investigation (EOM). Do not perform any 
-      # policy action at this protocol phase.
+      # policy action in this protocol stage.
       self.session.add_env_rcpt(to)
     else:
       # DKIM disabled. Policy enforcement takes place here.
@@ -188,25 +188,37 @@ class LdapAclMilter(Milter.Base):
         else:
           log_info("TEST-Mode: {}".format(e.message), self.session)
     return self.milter_action(action = 'continue')
+  
+  def data(self):
+    self.session.set_proto_stage('DATA')
+    if g_config_backend.milter_allow_null_sender and self.session.is_null_sender():
+      return self.milter_action(action = 'continue')
+    self.session.set_queue_id(self.getsymval('i'))
+    log_debug(
+      "Queue-id: {}".format(self.session.get_queue_id()),
+      self.session
+    )
+    return self.milter_action(action = 'continue')
 
   def header(self, hname, hval):
     self.session.set_proto_stage('HDR')
-    self.session.set_queue_id(self.getsymval('i'))
     if g_config_backend.milter_allow_null_sender and self.session.is_null_sender():
       return self.milter_action(action = 'continue')
     if g_config_backend.milter_dkim_enabled == True:
       # Parse RFC-5322-From header
-      if(hname.lower() == "From".lower()):
+      if(hname.lower() == "from"):
+        log_debug("hname={0}, hval={1}".format(hname, hval), self.session)
         hdr_5322_from = email.utils.parseaddr(hval)
         self.session.set_hdr_from(hdr_5322_from[1].lower())
         m = re.match(g_rex_domain, self.session.get_hdr_from())
         if m is None:
-          return self.milter_action(
-            action = 'reject',
-            reason = "Could not determine domain-part of 5322.from={}".format(
+          log_warning(
+            "Could not determine domain part of 5322.from={}".format(
               self.session.get_hdr_from()
-            )
+            ),
+            self.session
           )
+          return self.milter_action(action = 'continue')
         self.session.set_hdr_from_domain(m.group(1))
         log_debug(
           "5322.from={0}, 5322.from_domain={1}".format(
@@ -215,7 +227,11 @@ class LdapAclMilter(Milter.Base):
           self.session
         )
       # Parse RFC-7601 Authentication-Results header
-      elif(hname.lower() == "Authentication-Results".lower()):
+      elif(hname.lower() == "authentication-results"):
+        if not self.session.get_hdr_from_domain():
+          log_debug("DKIM validation impossible - no 5321.from_domain", self.session)
+          return self.milter_action(action = 'continue')
+        log_debug("hname={0}, hval={1}".format(hname, hval), self.session)
         ar = None
         try:
           ar = authres.AuthenticationResultsHeader.parse(
