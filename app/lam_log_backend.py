@@ -24,7 +24,7 @@ def init_log_backend():
   logging.info("Logger initialized")
 
 def do_log(level: str, log_message: str, session: Optional[LamSession] = None):
-  log_line = ''
+  log_line = '-'
   if session is not None:
     if hasattr(session, 'mconn_id'):
       log_line = "{}".format(session.get_mconn_id())

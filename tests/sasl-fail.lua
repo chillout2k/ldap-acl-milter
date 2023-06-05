@@ -13,20 +13,15 @@ end
 mt.set_timeout(60)
 
 -- 5321.FROM+MACROS
-mt.macro(conn, SMFIC_MAIL, "{auth_authen}", "blubb-user-wild")
-if mt.mailfrom(conn, "tester@test.blah") ~= nil then
+mt.macro(conn, SMFIC_MAIL, "{auth_authen}", "blubb-user1")
+if mt.mailfrom(conn, "tester-fail@test.blah") ~= nil then
   error "mt.mailfrom() failed"
 end
 
 -- 5321.RCPT+MACROS
-mt.macro(conn, SMFIC_RCPT, "i", "test-wildcard-qid")
-if mt.rcptto(conn, "<anybody-xyz@out.there>") ~= nil then
+mt.macro(conn, SMFIC_RCPT, "i", "4CgSNs5Q9sz7SllQ")
+if mt.rcptto(conn, "<rcpt-fail@test.blubb>") ~= nil then
   error "mt.rcptto() failed"
-end
-
--- 5322.HEADERS
-if mt.header(conn, "fRoM", '"Blah Blubb" <tester@test.blah>') ~= nil then
-  error "mt.header(From) failed"  
 end
 
 -- EOM

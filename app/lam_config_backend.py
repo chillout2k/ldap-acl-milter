@@ -112,7 +112,7 @@ class LamConfigBackend():
     log_info("ENV[MILTER_EXPECT_AUTH]: {}".format(self.milter_expect_auth))
     
     if 'MILTER_WHITELISTED_RCPTS' in os.environ:
-      # A blank separated list is expected
+      # A blank or comma separated list is expected
       whitelisted_rcpts_str = os.environ['MILTER_WHITELISTED_RCPTS']
       for whitelisted_rcpt in re.split(',|\s', whitelisted_rcpts_str):
         if g_rex_email.match(whitelisted_rcpt) == None:

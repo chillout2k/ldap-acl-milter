@@ -65,26 +65,22 @@ class LdapAclMilter(Milter.Base):
       try:
         # this may fail, if no x509 client certificate was used.
         # postfix only passes this macro to milters if the TLS connection
-        # with the authenticating client was trusted in a x509 manner!
+        # with the authenticating client was trusted in a x509 manner (CA trust)!
         # Unfortunately, postfix only passes the CN-field of the subject/issuer DN :-/
         x509_subject = self.getsymval('{cert_subject}')
         if x509_subject != None:
           self.session.set_x509_subject(x509_subject)
-          log_debug(
-            "x509_subject={}".format(self.session.get_x509_subject()),
-            self.session
-          )
-        else:
-          log_debug("No x509_subject registered", self.session)
+        log_debug(
+          "x509_subject={}".format(self.session.get_x509_subject()),
+          self.session
+        )
         x509_issuer = self.getsymval('{cert_issuer}')
         if x509_issuer != None:
           self.session.set_x509_issuer(x509_issuer)
-          log_debug(
-            "x509_issuer={}".format(self.session.get_x509_issuer()),
-            self.session
-          )
-        else:
-          log_debug("No x509_issuer registered", self.session)
+        log_debug(
+          "x509_issuer={}".format(self.session.get_x509_issuer()),
+          self.session
+        )
       except:
         log_error(
           "x509 exception: {}".format(traceback.format_exc()),
@@ -95,12 +91,10 @@ class LdapAclMilter(Milter.Base):
         sasl_user = self.getsymval('{auth_authen}')
         if sasl_user != None:
           self.session.set_sasl_user(sasl_user)
-          log_debug(
-            "sasl_user={}".format(self.session.get_sasl_user()),
-            self.session
-          )
-        else:
-          log_debug("No sasl_user registered", self.session)
+        log_debug(
+          "sasl_user={}".format(self.session.get_sasl_user()),
+          self.session
+        )
       except:
         log_error(
           "sasl_user exception: {}".format(traceback.format_exc()),
@@ -253,7 +247,7 @@ class LdapAclMilter(Milter.Base):
               self.session
             )
         except Exception as e:
-          log_info("AR-parse exception: {0}".format(str(e)), self.session)
+          log_warning("AR-parse exception: {0}".format(str(e)), self.session)
     return self.milter_action(action = 'continue')
 
   # Not registered/used callbacks
@@ -289,7 +283,7 @@ class LdapAclMilter(Milter.Base):
           if self.session.get_hdr_from_domain().lower() == passed_dkim_sdid.lower():
             self.session.set_dkim_aligned(True)
             log_info(
-              "Found aligned DKIM signature for SDID: {0}".format(
+              "Found aligned DKIM signature for SDID={0}".format(
                 passed_dkim_sdid
               ),
               self.session
