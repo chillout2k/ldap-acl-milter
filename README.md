@@ -62,14 +62,14 @@ services:
       #LDAP_QUERY: (&(mail=%rcpt%)(|(amavisWhitelistSender=*@%from_domain%)(amavisWhitelistSender=%from%)))
       # LDAP_QUERY: (&(|(mail=%rcpt%)(mail=*@%rcpt_domain%))(|(amavisWhitelistSender=*@%from_domain%)(amavisWhitelistSender=%from%)))
       # This enables the use of own ldap-acl-milter LDAP schema. Default: False
-      # Setting MILTER_SCHEMA: True disables the LDAP_QUERY parameter!
-      MILTER_SCHEMA: 'True'
-      # If MILTER_SCHEMA_WILDCARD_DOMAIN is set to True, the milter allows *@domain
+      # Setting MILTER_SCHEMA: true disables the LDAP_QUERY parameter!
+      #MILTER_SCHEMA: 'true'
+      # If MILTER_SCHEMA_WILDCARD_DOMAIN is set to true, the milter allows *@domain
       # as valid sender/recipient addresses in LDAP.
       # This only works if MILTER_SCHEMA is enabled!
       MILTER_SCHEMA_WILDCARD_DOMAIN: 'False'
       # default: test. Possible: test, reject
-      MILTER_MODE: 'reject'
+      #MILTER_MODE: 'reject'
       MILTER_NAME: some-another-milter-name
       # Default: UNIX-socket located under /socket/ldap-acl-milter
       # https://pythonhosted.org/pymilter/namespacemilter.html#a266a6e09897499d8b1ae0e20f0d2be73
@@ -79,10 +79,23 @@ services:
       # Expect authentication information from LDAP like allowedClientAddr,
       # allowedSaslUser or allowedx509CN. This is usefull if the milter handles
       # outbound email traffic, where senders must authenticate before submission.
-      # Default: False (inbound mode)
-      MILTER_EXPECT_AUTH: 'True'
-      # Blank or comma separated list of valid email recipients to whitelist,
-      MILTER_WHITELISTED_RCPTS: 'postmaster@example.com,hostmaster@example.org'
+      # Default: false (inbound mode)
+      #MILTER_EXPECT_AUTH: 'true'
+      # Blank or comma separated list of valid email recipients to whitelist (default: empty)
+      #MILTER_WHITELISTED_RCPTS: 'postmaster@example.com,hostmaster@example.org'
+      # Allow null-sender (<>) for bounces/DSNs (default: disabled)
+      #MILTER_ALLOW_NULL_SENDER: 'true'
+      # Enable recipient count limits (default: disabled)
+      #MILTER_MAX_RCPT_ENABLED: 'true'
+      #MILTER_MAX_RCPT: 1
+      # Enable DKIM checks (default: disabled).
+      # This enables the milter to use the 
+      # sender address placed in the 5322.from header
+      # within policy checks, unless the DKIM authentication results
+      # are invalid.
+      # Enabling this feature also requires a DKIM validating milter
+      # BEFORE the ldap-acl-milter!
+      #MILTER_DKIM_ENABLED: 'true'
     hostname: ldap-acl-milter
     volumes:
     - "lam_socket:/socket/:rw"
