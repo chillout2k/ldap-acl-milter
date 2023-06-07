@@ -185,8 +185,6 @@ class LdapAclMilter(Milter.Base):
   
   def data(self):
     self.session.set_proto_stage('DATA')
-    if g_config_backend.milter_allow_null_sender and self.session.is_null_sender():
-      return self.milter_action(action = 'continue')
     self.session.set_queue_id(self.getsymval('i'))
     log_debug(
       "Queue-id: {}".format(self.session.get_queue_id()),
